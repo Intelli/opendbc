@@ -27,7 +27,8 @@ class CarControllerParams:
     # - LFA max stock value is 119.9°.
     # The ADAS ECU clamps LKAS commands above 176.7° down to 176.7°,
     # and clamps LFA commands above 119.9° down to 119.9°.
-    180,  # degrees (safe upper bound for command, allowing some margin)
+    # NOTE: Increased to 360° to allow full steering range for vehicles like Kia EV9
+    360,  # degrees (safe upper bound for command, allowing some margin)
     # HKG uses a vehicle model instead, check carcontroller.py for details
     ([], []),
     ([], []),
