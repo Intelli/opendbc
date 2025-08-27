@@ -52,7 +52,7 @@ BO_ 203 LFA_ALT: 24 CGW_CCU
  SG_ COUNTER : 16|8@1+ (1,0) [0|0] "0" FCU_C,GW_RGW,MDPS,SFA
  SG_ ADAS_ActvACISta : 24|4@1+ (1,0) [0|0] "" GW_RGW,MDPS,SFA
  SG_ ADAS_ActvACILvl2Sta : 28|4@1+ (1,0) [0|0] "" ESC,FCU_C,GW_RGW,MDPS,SFA,VPC_C
- SG_ ADAS_StrAnglReqVal : 32|14@1- (0.1,0) [0|119.9] "Deg" GW_RGW,MDPS,SFA
+ SG_ ADAS_StrAnglReqVal : 32|14@1- (0.1,0) [0|176.7] "Deg" GW_RGW,MDPS,SFA
  SG_ ADAS_ACIAnglTqRedcGainVal : 48|8@1+ (0.004,0) [0|1] "" GW_RGW,MDPS,SFA
  SG_ FCA_ESA_ActvSta : 56|2@1+ (1,0) [0|0] "" GW_RGW,MDPS,SFA
  SG_ FCA_ESA_TqBstGainVal : 64|8@1+ (0.004,0) [0|0] "" GW_RGW,MDPS,SFA
