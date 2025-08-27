@@ -7,7 +7,7 @@ from opendbc.car.vehicle_model import VehicleModel
 FRICTION_THRESHOLD = 0.3
 
 # ISO 11270
-ISO_LATERAL_ACCEL = 3.6  # m/s^2
+ISO_LATERAL_ACCEL = 3.0  # m/s^2
 ISO_LATERAL_JERK = 5.0  # m/s^3
 
 
@@ -100,7 +100,15 @@ def get_max_angle_delta_vm(v_ego_raw: float, VM: VehicleModel, limits):
 
 def get_max_angle_vm(v_ego_raw: float, VM: VehicleModel, limits):
   """Calculate the maximum steering angle based on lateral acceleration limits."""
-  max_curvature = limits.ANGLE_LIMITS.MAX_LATERAL_ACCEL / (v_ego_raw ** 2)  # 1/m
+  # Bump specific MAX_LATERAL_ACCEL values at low speed (~22 mph)
+  max_lateral_accel = limits.ANGLE_LIMITS.MAX_LATERAL_ACCEL
+  if v_ego_raw < 10.0:
+    if max_lateral_accel == 3.0:
+      max_lateral_accel = 3.6
+    elif max_lateral_accel == 3.6:
+      max_lateral_accel = 4.0
+  
+  max_curvature = max_lateral_accel / (v_ego_raw ** 2)  # 1/m
   return math.degrees(VM.get_steer_from_curvature(max_curvature, v_ego_raw, 0))  # deg
 
 
