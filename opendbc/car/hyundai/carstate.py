@@ -310,8 +310,18 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     ret.accFaulted = cp.vl["TCS"]["ACCEnable"] != 0  # 0 ACC CONTROL ENABLED, 1-3 ACC CONTROL DISABLED
 
     if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
-      self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"] if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT
-                                          else cp_cam.vl["CAM_0x2a4"])
+      # Handle missing camera messages gracefully for cars like EV9
+      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT:
+        if "CAM_0x362" in cp_cam.vl:
+          self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"])
+        else:
+          # Fallback to default values if camera message is missing
+          self.lfa_block_msg = {"COUNTER": 0, "LEFT_LANE_LINE": 0, "RIGHT_LANE_LINE": 0}
+          for i in range(3, 32):
+            if i != 7:
+              self.lfa_block_msg[f"BYTE{i}"] = 0
+      else:
+        self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x2a4"])
 
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
 
