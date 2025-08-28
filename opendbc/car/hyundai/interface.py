@@ -36,6 +36,11 @@ class CarInterface(CarInterfaceBase):
     # "LFA steering" if camera directly sends LFA to the MDPS
     cam_can = CanBus(None, fingerprint).CAM
     lka_steering = 0x50 in fingerprint[cam_can] or 0x110 in fingerprint[cam_can]
+    
+    # Force LKA steering mode for EV9 to use LKAS_ALT message 272
+    if candidate == CAR.KIA_EV9:
+      lka_steering = True
+    
     CAN = CanBus(None, fingerprint, lka_steering)
 
     if ret.flags & HyundaiFlags.CANFD:
@@ -55,7 +60,7 @@ class CarInterface(CarInterfaceBase):
         # detect LKA steering
         ret.flags |= HyundaiFlags.CANFD_LKA_STEERING.value
         # we only have validated ALT messages for angle steering cars
-        if 0x110 in fingerprint[CAN.CAM]:
+        if 0x110 in fingerprint[CAN.CAM] or candidate == CAR.KIA_EV9:
           ret.flags |= HyundaiFlags.CANFD_LKA_STEERING_ALT.value
       else:
         # no LKA steering
