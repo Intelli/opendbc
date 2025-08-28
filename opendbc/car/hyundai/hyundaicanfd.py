@@ -50,18 +50,18 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   # Angle control setup - different for direct LFA vs LKAS modes
   if CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
     if CP.carFingerprint == CAR.KIA_EV9:
-      # Conservative LKAS_ALT mode - minimal changes to unlock 176.7° limit
+      # Standard LKAS_ALT mode matching defaults - then test regulation mode
       values |= {
         "LKA_OptUsmSta": 2,  # "LKA" mode (not LDW) - essential for angle authority
-        "LKA_UsmMod": 0,     # Keep default "hide LKAS settings" - don't be suspicious
+        "LKA_UsmMod": 0,     # Match default "hide LKAS settings"
         "StrTqReqVal": 0,    # we don't use torque for angle control
-        "ActToiSta": 1,      # "Activate TOI" - needed for angle control
+        "ActToiSta": 0,      # Match default - don't activate TOI yet
         "ToiFltSta": 0,      # "No Fault" - system healthy
-        "LKA_RcgSta": 0,     # Keep default "not recognized" - don't claim too much
-        "LKA_SysIndReq": 2,  # Standard "Lane Recognized (Green)" - not special mode
+        "LKA_RcgSta": 3 if lat_active else 0,  # Match default - full lane recognition when active
+        "LKA_SysIndReq": 6,  # TEST: "Regulation_(Orange On)" - special authority mode
         "ADAS_StrAnglReqVal": apply_angle,
         "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
-        "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,  # Use normal torque value
+        "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,  # Normal torque value
         "LKA_SysWrn": 0,     # No warnings - clean system state
       }
     else:
