@@ -1,7 +1,7 @@
 import numpy as np
 from opendbc.car import CanBusBase
 from opendbc.car.crc import CRC16_XMODEM
-from opendbc.car.hyundai.values import HyundaiFlags, CAR
+from opendbc.car.hyundai.values import HyundaiFlags
 
 
 class CanBus(CanBusBase):
@@ -63,14 +63,11 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   ret = []
   if CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
     lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
-    # Force LKAS_ALT for EV9 even if camera companion message is missing
-    if CP.carFingerprint == CAR.KIA_EV9:
-      lkas_msg = "LKAS_ALT"
-    # if CP.openpilotLongitudinalControl:
-    #  ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
+    if CP.openpilotLongitudinalControl:
+      ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
     ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, values))
   else:
-    ret.append(packer.make_can_msg("LKAS_ALT", CAN.ECAN, values))
+    ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
 
   return ret
 
