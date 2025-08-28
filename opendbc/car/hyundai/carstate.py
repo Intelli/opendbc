@@ -315,17 +315,38 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
         if "CAM_0x362" in cp_cam.vl:
           self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"])
         else:
-          # Fallback to complete CAM_0x362 structure for cars without camera support
+          # Fallback using actual working CAM_0x362 data from EV9 sendcan logs
+          # Pattern from: b'h\xa6\xf2\x11\x00 \x01\x0003\x96\x02\x00\x00\x00\x00\x00\x00\x9b\x01l\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
           self.lfa_block_msg = {
-            "CHECKSUM": 0,
-            "COUNTER": 0,
-            "LEFT_LANE_LINE": 0,
-            "RIGHT_LANE_LINE": 0,
+            "CHECKSUM": 0xa668,  # From actual sendcan logs
+            "COUNTER": 0x11,     # From actual sendcan logs
+            "LEFT_LANE_LINE": 0,  # No lane lines detected  
+            "RIGHT_LANE_LINE": 0, # No lane lines detected
             "SET_ME_0": 0,
             "SET_ME_0_2": 0,
+            "BYTE3": 0xF2,       # From sendcan logs
+            "BYTE4": 0x11,
+            "BYTE5": 0x00,
+            "BYTE6": 0x20,       # From sendcan logs
+            "BYTE8": 0x01,
+            "BYTE9": 0x00,
+            "BYTE10": 0x30,      # From sendcan logs  
+            "BYTE11": 0x33,
+            "BYTE12": 0x96,
+            "BYTE13": 0x02,
+            "BYTE14": 0x00,
+            "BYTE15": 0x00,
+            "BYTE16": 0x00,
+            "BYTE17": 0x00,
+            "BYTE18": 0x00,
+            "BYTE19": 0x00,
+            "BYTE20": 0x9B,
+            "BYTE21": 0x01,
+            "BYTE22": 0x6C,
+            "BYTE23": 0x01,
           }
-          # Add all BYTE fields that create_suppress_lfa expects
-          for i in range(3, 32):
+          # Set remaining BYTE fields to 0
+          for i in range(24, 32):
             if i != 7:  # Skip BYTE7 as per the suppress function
               self.lfa_block_msg[f"BYTE{i}"] = 0
       else:
