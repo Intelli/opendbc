@@ -144,7 +144,7 @@ class TestHyundaiCanfdAngleSteering(TestHyundaiCanfdBase, common.AngleSteeringSa
 
   # Angle control limits
   BASELINE_PANDA_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
-    360,  # degrees (testing higher limit for LKAS_ALT protocol)
+    180,  # degrees (safe upper bound for command, allowing some margin)
     ([], []),
     ([], []),
     MAX_LATERAL_ACCEL=(ISO_LATERAL_ACCEL + (ACCELERATION_DUE_TO_GRAVITY * 0.06)),  # ~3.0 m/s^2
@@ -152,7 +152,7 @@ class TestHyundaiCanfdAngleSteering(TestHyundaiCanfdBase, common.AngleSteeringSa
     MAX_ANGLE_RATE=5  # comfort rate limit for angle commands, in degrees per frame.
   )
 
-  STEER_ANGLE_MAX = 360  # deg (testing higher limit)
+  STEER_ANGLE_MAX = 180  # deg
   DEG_TO_CAN = 10
   ANGLE_SAFETY_THRESHOLD_PCT = -2.0  # Fail if difference is less than -2%
 
