@@ -24,10 +24,10 @@ class CarControllerParams:
   ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
     # Steering angle limits based on observed stock ADAS behavior:
     # - LKAS max requested angle is 176.7°, but no fault occurs if higher values are requested.
-    # - LFA max stock value is 119.9°.
-    # The ADAS ECU clamps LKAS commands above 176.7° down to 176.7°,
-    # and clamps LFA commands above 119.9° down to 119.9°.
-    180,  # degrees (safe upper bound for command, allowing some margin)
+    # - LFA max stock value was 119.9° (increased to 360° for testing).
+    # The ADAS ECU normally clamps LKAS commands above 176.7° down to 176.7°,
+    # and clamps LFA commands above 119.9° down to 119.9° (testing with 360° limits).
+    360,  # degrees (testing higher limit for LKAS_ALT protocol)
     # HKG uses a vehicle model instead, check carcontroller.py for details
     ([], []),
     ([], []),
