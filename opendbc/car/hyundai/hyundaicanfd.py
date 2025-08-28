@@ -1,7 +1,7 @@
 import numpy as np
 from opendbc.car import CanBusBase
 from opendbc.car.crc import CRC16_XMODEM
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import HyundaiFlags, CAR
 
 
 class CanBus(CanBusBase):
@@ -47,18 +47,34 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     "LKA_RcgSta": 0,  # lane recognition status (0 for "not recognized")
   }
 
-  # Angle control doesn't support using LFA yet
+  # Angle control setup - different for direct LFA vs LKAS modes
   if CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-    # LKAS messages take priority over LFA messages on HDA2.
-    values |= {
-      "LKA_OptUsmSta": 0,  # TODO: not used by the stock system
-      "StrTqReqVal": 0,  # we don't use torque
-      "ActToiSta": 0,  # we don't use torque
-      "LKA_RcgSta": 3 if lat_active else 0,
-      "ADAS_StrAnglReqVal": apply_angle,
-      "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
-      "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,
-    }
+    if CP.carFingerprint == CAR.KIA_EV9:
+      # Maximum authority LKAS_ALT mode for EV9 to unlock 176.7° limit
+      values |= {
+        "LKA_OptUsmSta": 2,  # "LKA" mode (not LDW) - key for angle authority
+        "LKA_UsmMod": 1,     # "LKA 1 mode" - specific LKA mode
+        "StrTqReqVal": 0,    # we don't use torque for angle control
+        "ActToiSta": 1,      # "Activate TOI" - activate torque overlay interface
+        "ToiFltSta": 0,      # "No Fault" - system healthy
+        "LKA_RcgSta": 3,     # "Full Lane Recognition" - highest confidence
+        "LKA_SysIndReq": 2,  # "Lane Recognized_(Green On)" - active state
+        "ADAS_StrAnglReqVal": apply_angle,
+        "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
+        "ADAS_ACIAnglTqRedcGainVal": 250 if lat_active else 0,  # Max valid authority
+        "LKA_SysWrn": 0,     # No warnings - clean system state
+      }
+    else:
+      # Standard LKAS mode for other cars
+      values |= {
+        "LKA_OptUsmSta": 0,  # TODO: not used by the stock system
+        "StrTqReqVal": 0,  # we don't use torque
+        "ActToiSta": 0,  # we don't use torque
+        "LKA_RcgSta": 3 if lat_active else 0,
+        "ADAS_StrAnglReqVal": apply_angle,
+        "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
+        "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,
+      }
 
   ret = []
   if CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
