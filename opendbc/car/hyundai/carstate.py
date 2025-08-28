@@ -315,18 +315,10 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
         if "CAM_0x362" in cp_cam.vl:
           self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"])
         else:
-          # Fallback to complete CAM_0x362 structure for cars without camera support
-          self.lfa_block_msg = {
-            "CHECKSUM": 0,
-            "COUNTER": 0,
-            "LEFT_LANE_LINE": 0,
-            "RIGHT_LANE_LINE": 0,
-            "SET_ME_0": 0,
-            "SET_ME_0_2": 0,
-          }
-          # Add all BYTE fields that create_suppress_lfa expects
+          # Fallback to default values if camera message is missing
+          self.lfa_block_msg = {"COUNTER": 0, "LEFT_LANE_LINE": 0, "RIGHT_LANE_LINE": 0}
           for i in range(3, 32):
-            if i != 7:  # Skip BYTE7 as per the suppress function
+            if i != 7:
               self.lfa_block_msg[f"BYTE{i}"] = 0
       else:
         self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x2a4"])
