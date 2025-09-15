@@ -48,6 +48,8 @@
 static bool hyundai_canfd_alt_buttons = false;
 static bool hyundai_canfd_lka_steering_alt = false;
 static bool hyundai_canfd_angle_steering = false;
+// Platform selector for vehicle model params (encoded in safetyParam)
+static uint8_t hyundai_canfd_platform_id = 0U;
 
 static unsigned int hyundai_canfd_get_lka_addr(void) {
   return hyundai_canfd_lka_steering_alt ? 0x110U : 0x50U;
@@ -197,6 +199,13 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
     .wheelbase = 2.81,
   };
 
+  // KIA_EV9 vehicle model params (values can be found on values.py)
+  const AngleSteeringParams HYUNDAI_STEERING_PARAMS_EV9 = {
+    .slip_factor = -0.0005410588125765342,  // calc_slip_factor(VM)
+    .steer_ratio = 16.0,
+    .wheelbase = 3.10,
+  };
+
   bool tx = true;
 
   // steering
@@ -209,7 +218,12 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
       int desired_angle = (msg->data[11] << 6U) | (msg->data[10] >> 2U);
       desired_angle = to_signed(desired_angle, 14);
 
-      if (steer_angle_cmd_checks_vm(desired_angle, steer_angle_req, HYUNDAI_CANFD_ANGLE_STEERING_LIMITS, HYUNDAI_STEERING_PARAMS)) {
+      // Select vehicle model parameters per platform when available
+      // NOTE: baseline (HYUNDAI_STEERING_PARAMS) is used unless platform_id selects a model (e.g., EV9 below).
+      enum { HYUNDAI_CANFD_PLATFORM_DEFAULT = 0U, HYUNDAI_CANFD_PLATFORM_EV9 = 1U };
+      const AngleSteeringParams hyundai_vm_params = (hyundai_canfd_platform_id == HYUNDAI_CANFD_PLATFORM_EV9) ? HYUNDAI_STEERING_PARAMS_EV9 : HYUNDAI_STEERING_PARAMS;
+
+      if (steer_angle_cmd_checks_vm(desired_angle, steer_angle_req, HYUNDAI_CANFD_ANGLE_STEERING_LIMITS, hyundai_vm_params)) {
         tx = false;
       }
     } else {
@@ -278,6 +292,9 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   const int HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT = 128;
   const int HYUNDAI_PARAM_CANFD_ALT_BUTTONS = 32;
   const int HYUNDAI_PARAM_CANFD_ANGLE_STEERING = 1024;
+  // Platform-ID field: 3 bits (values: 0..7) starting at bit 11 (2048)
+  const int HYUNDAI_PARAM_CANFD_PLATFORM_ID_SHIFT = 11;
+  const int HYUNDAI_PARAM_CANFD_PLATFORM_ID_MASK = 0x7;
 
   static const CanMsg HYUNDAI_CANFD_LKA_STEERING_TX_MSGS[] = {
     HYUNDAI_CANFD_LKA_STEERING_COMMON_TX_MSGS(0, 1)
@@ -329,6 +346,8 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   hyundai_canfd_angle_steering = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ANGLE_STEERING);
   // TODO: test this restriction
   hyundai_canfd_lka_steering_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT);
+  // Parse platform ID for vehicle model selection
+  hyundai_canfd_platform_id = (param >> HYUNDAI_PARAM_CANFD_PLATFORM_ID_SHIFT) & HYUNDAI_PARAM_CANFD_PLATFORM_ID_MASK;
 
   safety_config ret;
   if (hyundai_longitudinal) {

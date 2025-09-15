@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass, field
-from enum import Enum, IntFlag
+from enum import Enum, IntFlag, IntEnum
 
 from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds, ACCELERATION_DUE_TO_GRAVITY
 from opendbc.car.lateral import AngleSteeringLimits, ISO_LATERAL_ACCEL
@@ -121,6 +121,17 @@ class HyundaiSafetyFlags(IntFlag):
   FCEV_GAS = 256
   ALT_LIMITS_2 = 512
   CANFD_ANGLE_STEERING = 1024
+
+
+# Encoded CAN-FD platform ID (for safety vehicle model selection)
+# Stored in safetyParam bits [13:11] (3 bits), ID=0 means default model
+HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT = 11
+HYUNDAI_CANFD_PARAM_PLATFORM_ID_MASK = 0x7
+
+
+class HyundaiCanfdPlatform(IntEnum):
+  DEFAULT = 0
+  EV9 = 1
 
 
 class HyundaiFlags(IntFlag):
