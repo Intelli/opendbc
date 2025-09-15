@@ -704,15 +704,6 @@ class TestHyundaiCanfdAngleLFALongTesterPresent(unittest.TestCase):
     self.assertTrue(self._tx(good))
     self.assertFalse(self._tx(bad))
 
-  def test_comm_control_allowed(self):
-    # Disable normal comm (DisableRxDisableTx, NORMAL)
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
-
 
 class TestHyundaiCanfdAngleLFANonLongCameraTesterPresent(unittest.TestCase):
   TX_MSGS = None
@@ -734,14 +725,6 @@ class TestHyundaiCanfdAngleLFANonLongCameraTesterPresent(unittest.TestCase):
     self.assertTrue(self._tx(good))
     self.assertFalse(self._tx(bad))
 
-  def test_comm_control_allowed(self):
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
-
 
 class TestHyundaiCanfdAngleLFANonLongRadarTesterPresent(unittest.TestCase):
   TX_MSGS = None
@@ -762,14 +745,6 @@ class TestHyundaiCanfdAngleLFANonLongRadarTesterPresent(unittest.TestCase):
     bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\xAA\xAA\x00\x00\x00\x00\x00")
     self.assertTrue(self._tx(good))
     self.assertFalse(self._tx(bad))
-
-  def test_comm_control_allowed(self):
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
 
 
 if __name__ == "__main__":

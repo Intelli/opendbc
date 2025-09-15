@@ -248,22 +248,9 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
     }
   }
 
-  // UDS: only specific diag frames allowed on diagnostics addresses
-  // - 0x730 (ADAS): allow tester-present and communication-control only
-  //   - TesterPresent:  02 3E 80 00 00 00 00 00
-  //   - CommControl:    03 28 83 01 00 00 00 00 (DisableRxDisableTx, NORMAL)
-  //                     03 28 00 01 00 00 00 00 (EnableRxEnableTx, NORMAL)
-  // - 0x7D0 (RADAR): allow tester-present only when not camera_scc
-  if ((msg->addr == 0x730U) && (hyundai_canfd_lka_steering || (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)))) {
-    const uint32_t top4 = GET_BYTES(msg, 0, 4);
-    bool ok = (top4 == 0x00803E02U)  // TesterPresent
-           || (top4 == 0x01832803U)  // CommControl disable (0x28, 0x83, 0x01)
-           || (top4 == 0x01002803U); // CommControl enable  (0x28, 0x00, 0x01)
-    if ((!ok) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
-      tx = false;
-    }
-  }
-  if ((msg->addr == 0x7D0U) && !hyundai_camera_scc) {
+  // UDS: only tester present ("\x02\x3E\x80\x00\x00\x00\x00\x00") allowed on diagnostics address
+  // Allow ADAS tester-present (0x730) on LKA steering platforms and on angle-steering EV9 platform only
+  if (((msg->addr == 0x730U) && (hyundai_canfd_lka_steering || (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)))) || ((msg->addr == 0x7D0U) && !hyundai_camera_scc)) {
     if ((GET_BYTES(msg, 0, 4) != 0x00803E02U) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
       tx = false;
     }

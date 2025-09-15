@@ -106,16 +106,6 @@ def make_tester_present_msg(addr, bus, subaddr=None, suppress_response=False):
   return CanData(addr, bytes(dat), bus)
 
 
-def make_comm_control_msg(addr: int, bus: int, subfunction: int, message_type: int, suppress_response: bool = True):
-  # UDS 0x28 CommunicationControl, single-frame
-  # subfunction may include suppress-positive-response bit (0x80)
-  dat = [0x03, uds.SERVICE_TYPE.COMMUNICATION_CONTROL]
-  dat.append((subfunction | 0x80) if suppress_response else subfunction)
-  dat.append(message_type)
-  dat.extend([0x0] * (8 - len(dat)))
-  return CanData(addr, bytes(dat), bus)
-
-
 def get_safety_config(safety_model: structs.CarParams.SafetyModel, safety_param: int = None) -> structs.CarParams.SafetyConfig:
   ret = structs.CarParams.SafetyConfig()
   ret.safetyModel = safety_model
