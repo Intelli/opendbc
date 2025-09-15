@@ -101,13 +101,7 @@ def get_max_angle_delta_vm(v_ego_raw: float, VM: VehicleModel, limits):
 def get_max_angle_vm(v_ego_raw: float, VM: VehicleModel, limits):
   """Calculate the maximum steering angle based on lateral acceleration limits."""
   max_curvature = limits.ANGLE_LIMITS.MAX_LATERAL_ACCEL / (v_ego_raw ** 2)  # 1/m
-  max_angle = math.degrees(VM.get_steer_from_curvature(max_curvature, v_ego_raw, 0))  # deg
-  
-  # Ensure minimum angle of 180 degrees at low speeds (<=32 km/h)
-  if v_ego_raw <= 32.0 / 3.6:  # 32 km/h converted to m/s (~8.89 m/s)
-    max_angle = max(max_angle, 180.0)
-  
-  return max_angle
+  return math.degrees(VM.get_steer_from_curvature(max_curvature, v_ego_raw, 0))  # deg
 
 
 def apply_steer_angle_limits_vm(apply_angle: float, apply_angle_last: float, v_ego_raw: float, steering_angle: float,
