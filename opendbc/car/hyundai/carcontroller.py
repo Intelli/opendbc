@@ -13,7 +13,7 @@ except ImportError:
   PARAMS_AVAILABLE = False
 
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, make_comm_control_msg, structs
+from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, make_comm_control_msg, make_diagnostic_session_control_msg, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance, apply_steer_angle_limits_vm
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
@@ -299,12 +299,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           elif CS.out.vEgoRaw > upper:
             session = False
         self._adas_diag_active = session
-        # On edge into session: disable normal comm (DisableRxDisableTx for NORMAL messages)
+        # On edge into session: switch to extended diagnostics and disable normal comm
         if session and not prev_session:
+          # 0x10 Extended + 0x28 DisableRxDisableTx NORMAL
+          can_sends.append(make_diagnostic_session_control_msg(0x730, self.CAN.ECAN, uds.SESSION_TYPE.EXTENDED_DIAGNOSTIC, suppress_response=True))
           can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
-        # On edge out of session: re-enable normal comm
+        # On edge out of session: re-enable normal comm and return to default session
         if (not session) and prev_session:
           can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
+          can_sends.append(make_diagnostic_session_control_msg(0x730, self.CAN.ECAN, uds.SESSION_TYPE.DEFAULT, suppress_response=True))
         # Keep the diagnostic session alive while disabled and OP is steering
         if session and (self.frame % 100 == 0):
           can_sends.append(make_tester_present_msg(0x730, self.CAN.ECAN, suppress_response=True))

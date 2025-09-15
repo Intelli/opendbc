@@ -713,6 +713,14 @@ class TestHyundaiCanfdAngleLFALongTesterPresent(unittest.TestCase):
     self.assertTrue(self._tx(enable))
     self.assertFalse(self._tx(reject))
 
+  def test_diag_session_allowed(self):
+    ext = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x83\x00\x00\x00\x00\x00")
+    dft = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x81\x00\x00\x00\x00\x00")
+    bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x10\x83\x00\x00\x00\x00\x00")
+    self.assertTrue(self._tx(ext))
+    self.assertTrue(self._tx(dft))
+    self.assertFalse(self._tx(bad))
+
 
 class TestHyundaiCanfdAngleLFANonLongCameraTesterPresent(unittest.TestCase):
   TX_MSGS = None
@@ -742,6 +750,14 @@ class TestHyundaiCanfdAngleLFANonLongCameraTesterPresent(unittest.TestCase):
     self.assertTrue(self._tx(enable))
     self.assertFalse(self._tx(reject))
 
+  def test_diag_session_allowed(self):
+    ext = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x83\x00\x00\x00\x00\x00")
+    dft = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x81\x00\x00\x00\x00\x00")
+    bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x10\x83\x00\x00\x00\x00\x00")
+    self.assertTrue(self._tx(ext))
+    self.assertTrue(self._tx(dft))
+    self.assertFalse(self._tx(bad))
+
 
 class TestHyundaiCanfdAngleLFANonLongRadarTesterPresent(unittest.TestCase):
   TX_MSGS = None
@@ -770,6 +786,14 @@ class TestHyundaiCanfdAngleLFANonLongRadarTesterPresent(unittest.TestCase):
     self.assertTrue(self._tx(disable))
     self.assertTrue(self._tx(enable))
     self.assertFalse(self._tx(reject))
+
+  def test_diag_session_allowed(self):
+    ext = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x83\x00\x00\x00\x00\x00")
+    dft = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x81\x00\x00\x00\x00\x00")
+    bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x10\x83\x00\x00\x00\x00\x00")
+    self.assertTrue(self._tx(ext))
+    self.assertTrue(self._tx(dft))
+    self.assertFalse(self._tx(bad))
 
 
 if __name__ == "__main__":
