@@ -249,8 +249,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
   }
 
   // UDS: only tester present ("\x02\x3E\x80\x00\x00\x00\x00\x00") allowed on diagnostics address
-  // Allow ADAS tester-present (0x730) on LKA steering platforms and on angle-steering EV9 platform only
-  if (((msg->addr == 0x730U) && (hyundai_canfd_lka_steering || (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)))) || ((msg->addr == 0x7D0U) && !hyundai_camera_scc)) {
+  if (((msg->addr == 0x730U) && hyundai_canfd_lka_steering) || ((msg->addr == 0x7D0U) && !hyundai_camera_scc)) {
     if ((GET_BYTES(msg, 0, 4) != 0x00803E02U) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
       tx = false;
     }
@@ -324,14 +323,6 @@ static safety_config hyundai_canfd_init(uint16_t param) {
     HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, false)
   };
 
-  // Angle-steering variant: allow ADAS tester-present (0x730 on ECAN bus 0)
-  static const CanMsg HYUNDAI_CANFD_LFA_STEERING_TX_MSGS_ANGLE[] = {
-    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
-    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0)
-    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, false)
-    {0x730, 0,  8, .check_relay = false},  /* ADAS tester present */
-  };
-
   // ADRV_0x160 is checked for radar liveness
   static const CanMsg HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS[] = {
     HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
@@ -341,30 +332,12 @@ static safety_config hyundai_canfd_init(uint16_t param) {
     {0x7D0, 0, 8, .check_relay = false},  // tester present for radar ECU disable
   };
 
-  // Angle-steering variant: include ADAS tester-present on ECAN bus 0
-  static const CanMsg HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS_ANGLE[] = {
-    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
-    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0)
-    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, true)
-    {0x160, 0, 16, .check_relay = true}, /* ADRV_0x160 */
-    {0x7D0, 0,  8, .check_relay = false}, /* radar ECU tester present */
-    {0x730, 0,  8, .check_relay = false}, /* ADAS tester present */
-  };
-
   // ADRV_0x160 is checked for relay malfunction
 #define HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS(longitudinal) \
     HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2) \
     HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0) \
     HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, (longitudinal)) \
     {0x160, 0, 16, .check_relay = (longitudinal)}, /* ADRV_0x160 */ \
-
-  // Angle-steering variant: append ADAS tester-present on ECAN bus 0
-#define HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(longitudinal) \
-    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2) \
-    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0) \
-    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, (longitudinal)) \
-    {0x160, 0, 16, .check_relay = (longitudinal)}, /* ADRV_0x160 */ \
-    {0x730, 0,  8, .check_relay = false},          /* ADAS tester present */ \
 
   hyundai_common_init(param);
 
@@ -374,9 +347,6 @@ static safety_config hyundai_canfd_init(uint16_t param) {
   // TODO: test this restriction
   hyundai_canfd_lka_steering_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT);
   // Parse platform ID for vehicle model selection
-  // cppcheck-suppress misra-c2012-10.1
-  // cppcheck-suppress misra-c2012-10.3
-  // cppcheck-suppress misra-c2012-10.4
   hyundai_canfd_platform_id = (param >> HYUNDAI_PARAM_CANFD_PLATFORM_ID_SHIFT) & HYUNDAI_PARAM_CANFD_PLATFORM_ID_MASK;
 
   safety_config ret;
@@ -409,20 +379,9 @@ static safety_config hyundai_canfd_init(uint16_t param) {
       }
 
       if (hyundai_camera_scc) {
-        if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
-          static CanMsg hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle[] = {
-            HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(true)
-          };
-          SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle, ret);
-        } else {
-          SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
-        }
+        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
       } else {
-        if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
-          SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS_ANGLE, ret);
-        } else {
-          SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS, ret);
-        }
+        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS, ret);
       }
     }
 
@@ -455,11 +414,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_SCC_ADDR_CHECK(0)
       };
 
-      if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
-        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS_ANGLE, ret);
-      } else {
-        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS, ret);
-      }
+      SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS, ret);
 
       if (hyundai_canfd_alt_buttons) {
         SET_RX_CHECKS(hyundai_canfd_alt_buttons_radar_scc_rx_checks, ret);
@@ -485,14 +440,7 @@ static safety_config hyundai_canfd_init(uint16_t param) {
         HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS(false)
       };
 
-      if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
-        static CanMsg hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle[] = {
-          HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(false)
-        };
-        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle, ret);
-      } else {
-        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
-      }
+      SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
 
       if (hyundai_canfd_alt_buttons) {
         SET_RX_CHECKS(hyundai_canfd_alt_buttons_rx_checks, ret);
