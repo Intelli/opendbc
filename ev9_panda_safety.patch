@@ -1,0 +1,230 @@
+diff --git a/opendbc/car/hyundai/interface.py b/opendbc/car/hyundai/interface.py
+index 4a7b8f17..8fe758e3 100644
+--- a/opendbc/car/hyundai/interface.py
++++ b/opendbc/car/hyundai/interface.py
+@@ -2,7 +2,8 @@ from opendbc.car import Bus, get_safety_config, structs, uds
+ from opendbc.car.hyundai.hyundaicanfd import CanBus
+ from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, \
+                                                    CANFD_UNSUPPORTED_LONGITUDINAL_CAR, \
+-                                                   UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags
++                                                   UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags, \
++                                                   HyundaiCanfdPlatform, HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT
+ from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
+ from opendbc.car.interfaces import CarInterfaceBase
+ from opendbc.car.disable_ecu import disable_ecu
+@@ -157,6 +158,10 @@ class CarInterface(CarInterfaceBase):
+     if candidate == CAR.KIA_OPTIMA_G4_FL:
+       ret.steerActuatorDelay = 0.2
+ 
++    # EV9: set platform ID for vehicle model selection in panda safety
++    if (ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and candidate == CAR.KIA_EV9:
++      ret.safetyConfigs[-1].safetyParam |= (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
++
+     # Dashcam cars are missing a test route, or otherwise need validation
+     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
+     if candidate in (CAR.KIA_OPTIMA_H,):
+diff --git a/opendbc/car/hyundai/values.py b/opendbc/car/hyundai/values.py
+index cebcf3c7..67cbc45c 100644
+--- a/opendbc/car/hyundai/values.py
++++ b/opendbc/car/hyundai/values.py
+@@ -1,6 +1,6 @@
+ import re
+ from dataclasses import dataclass, field
+-from enum import Enum, IntFlag
++from enum import Enum, IntFlag, IntEnum
+ 
+ from opendbc.car import Bus, CarSpecs, DbcDict, PlatformConfig, Platforms, uds, ACCELERATION_DUE_TO_GRAVITY
+ from opendbc.car.lateral import AngleSteeringLimits, ISO_LATERAL_ACCEL
+@@ -123,6 +123,17 @@ class HyundaiSafetyFlags(IntFlag):
+   CANFD_ANGLE_STEERING = 1024
+ 
+ 
++# Encoded CAN-FD platform ID (for safety vehicle model selection)
++# Stored in safetyParam bits [13:11] (3 bits), ID=0 means default model
++HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT = 11
++HYUNDAI_CANFD_PARAM_PLATFORM_ID_MASK = 0x7
++
++
++class HyundaiCanfdPlatform(IntEnum):
++  DEFAULT = 0
++  EV9 = 1
++
++
+ class HyundaiFlags(IntFlag):
+   # Dynamic Flags
+ 
+diff --git a/opendbc/safety/modes/hyundai_canfd.h b/opendbc/safety/modes/hyundai_canfd.h
+index 44607d2d..62ec1491 100644
+--- a/opendbc/safety/modes/hyundai_canfd.h
++++ b/opendbc/safety/modes/hyundai_canfd.h
+@@ -48,6 +48,8 @@
+ static bool hyundai_canfd_alt_buttons = false;
+ static bool hyundai_canfd_lka_steering_alt = false;
+ static bool hyundai_canfd_angle_steering = false;
++// Platform selector for vehicle model params (encoded in safetyParam)
++static uint8_t hyundai_canfd_platform_id = 0U;
+ 
+ static unsigned int hyundai_canfd_get_lka_addr(void) {
+   return hyundai_canfd_lka_steering_alt ? 0x110U : 0x50U;
+@@ -163,6 +165,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+     .has_steer_req_tolerance = true,
+   };
+ 
++  // PANDA BASELINE ANGLE LIMITS
+   const AngleSteeringLimits HYUNDAI_CANFD_ANGLE_STEERING_LIMITS = {
+     .max_angle = 1800,
+     .angle_deg_to_can = 10,
+@@ -190,6 +193,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+   //   .wheelbase = 2.95,
+   // };
+ 
++  // PANDA BASELINE VEHICLE MODEL (Santa Fe)
+   // HYUNDAI_SANTA_FE_HEV_5TH_GEN values. (most conservative for now) (values can be found on values.py)
+   const AngleSteeringParams HYUNDAI_STEERING_PARAMS = {
+     .slip_factor = -0.00059689759884299,  // calc_slip_factor(VM)
+@@ -197,6 +201,13 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+     .wheelbase = 2.81,
+   };
+ 
++  // KIA_EV9 vehicle model params (values can be found on values.py)
++  const AngleSteeringParams HYUNDAI_STEERING_PARAMS_EV9 = {
++    .slip_factor = -0.0005410588125765342,  // calc_slip_factor(VM)
++    .steer_ratio = 16.0,
++    .wheelbase = 3.10,
++  };
++
+   bool tx = true;
+ 
+   // steering
+@@ -209,7 +220,12 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+       int desired_angle = (msg->data[11] << 6U) | (msg->data[10] >> 2U);
+       desired_angle = to_signed(desired_angle, 14);
+ 
+-      if (steer_angle_cmd_checks_vm(desired_angle, steer_angle_req, HYUNDAI_CANFD_ANGLE_STEERING_LIMITS, HYUNDAI_STEERING_PARAMS)) {
++      // Select vehicle model parameters per platform when available
++      // NOTE: baseline (HYUNDAI_STEERING_PARAMS) is used unless platform_id selects a model (e.g., EV9 below).
++      enum { HYUNDAI_CANFD_PLATFORM_DEFAULT = 0U, HYUNDAI_CANFD_PLATFORM_EV9 = 1U };
++      const AngleSteeringParams hyundai_vm_params = (hyundai_canfd_platform_id == HYUNDAI_CANFD_PLATFORM_EV9) ? HYUNDAI_STEERING_PARAMS_EV9 : HYUNDAI_STEERING_PARAMS;
++
++      if (steer_angle_cmd_checks_vm(desired_angle, steer_angle_req, HYUNDAI_CANFD_ANGLE_STEERING_LIMITS, hyundai_vm_params)) {
+         tx = false;
+       }
+     } else {
+@@ -278,6 +294,9 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+   const int HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT = 128;
+   const int HYUNDAI_PARAM_CANFD_ALT_BUTTONS = 32;
+   const int HYUNDAI_PARAM_CANFD_ANGLE_STEERING = 1024;
++  // Platform-ID field: 3 bits (values: 0..7) starting at bit 11 (2048)
++  const int HYUNDAI_PARAM_CANFD_PLATFORM_ID_SHIFT = 11;
++  const int HYUNDAI_PARAM_CANFD_PLATFORM_ID_MASK = 0x7;
+ 
+   static const CanMsg HYUNDAI_CANFD_LKA_STEERING_TX_MSGS[] = {
+     HYUNDAI_CANFD_LKA_STEERING_COMMON_TX_MSGS(0, 1)
+@@ -329,6 +348,8 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+   hyundai_canfd_angle_steering = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ANGLE_STEERING);
+   // TODO: test this restriction
+   hyundai_canfd_lka_steering_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT);
++  // Parse platform ID for vehicle model selection
++  hyundai_canfd_platform_id = (param >> HYUNDAI_PARAM_CANFD_PLATFORM_ID_SHIFT) & HYUNDAI_PARAM_CANFD_PLATFORM_ID_MASK;
+ 
+   safety_config ret;
+   if (hyundai_longitudinal) {
+diff --git a/opendbc/safety/tests/test_hyundai_canfd.py b/opendbc/safety/tests/test_hyundai_canfd.py
+index 47bac810..cbb9a4ef 100755
+--- a/opendbc/safety/tests/test_hyundai_canfd.py
++++ b/opendbc/safety/tests/test_hyundai_canfd.py
+@@ -5,7 +5,14 @@ import numpy as np
+ 
+ from opendbc.car import ACCELERATION_DUE_TO_GRAVITY
+ from opendbc.car.hyundai.carcontroller import ANGLE_SAFETY_BASELINE_MODEL
+-from opendbc.car.hyundai.values import HyundaiSafetyFlags, CAR, HyundaiFlags, CarControllerParams
++from opendbc.car.hyundai.values import (
++  HyundaiSafetyFlags,
++  CAR,
++  HyundaiFlags,
++  CarControllerParams,
++  HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT,
++  HyundaiCanfdPlatform,
++)
+ from opendbc.car.structs import CarParams
+ from opendbc.car.vehicle_model import VehicleModel, calc_slip_factor
+ from opendbc.safety.tests.libsafety import libsafety_py
+@@ -504,6 +511,78 @@ class TestHyundaiCanfdLKASteeringAltEVAngle(TestHyundaiCanfdLKASteeringAltEVBase
+     self.safety.init_tests()
+ 
+ 
++class TestHyundaiCanfdLKASteeringAltEVAngleEV9(TestHyundaiCanfdLKASteeringAltEVBase, TestHyundaiCanfdAngleSteering):
++
++  def setUp(self):
++    self.packer = CANPackerPanda("hyundai_canfd_generated")
++    self.safety = libsafety_py.libsafety
++    ev9_param = (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
++    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd,
++                                 HyundaiSafetyFlags.CANFD_LKA_STEERING | HyundaiSafetyFlags.EV_GAS |
++                                 HyundaiSafetyFlags.CANFD_LKA_STEERING_ALT | HyundaiSafetyFlags.CANFD_ANGLE_STEERING |
++                                 ev9_param)
++    self.safety.init_tests()
++
++  # Override to validate limits using EV9's vehicle model
++  def test_lateral_accel_limit(self):
++    car_name = "KIA_EV9"
++    for speed in np.linspace(0, 40, 100):
++      speed = round_speed(away_round(speed / 0.03125 * 3.6) * 0.03125 / 3.6)
++      speed = max(speed, 1)
++      for sign in (-1, 1):
++        self.safety.set_controls_allowed(True)
++        self._reset_speed_measurement(speed + 1)
++
++        angl = get_max_angle_vm(speed, self.get_vm(car_name), self.get_baseline_limits())
++        max_angle = round_angle(get_max_angle_vm(speed, self.get_vm(car_name), self.get_baseline_limits()), 1) * sign
++        max_angle = np.clip(max_angle, -self.STEER_ANGLE_MAX, self.STEER_ANGLE_MAX)
++        self.safety.set_desired_angle_last(round(max_angle * self.DEG_TO_CAN))
++        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle, True)), f"{angl} -- {max_angle}")
++
++        # 1 unit above limit: should only pass if the clamped max is already at boundary
++        max_angle_raw = round_angle(get_max_angle_vm(speed, self.get_vm(car_name), self.get_baseline_limits()), 3) * sign
++        max_angle = np.clip(max_angle_raw, -self.STEER_ANGLE_MAX, self.STEER_ANGLE_MAX)
++        self._tx(self._angle_cmd_msg(max_angle, True))
++        should_tx = abs(max_angle_raw) >= self.STEER_ANGLE_MAX
++        self.assertEqual(should_tx, self._tx(self._angle_cmd_msg(max_angle, True)), f"should_tx: {should_tx}, max_angle: {max_angle}, speed: {speed}")
++
++  # Override jerk test with EV9 VM
++  def test_lateral_jerk_limit(self):
++    car_name = "KIA_EV9"
++    for speed in np.linspace(0, 40, 100):
++      speed = round_speed(away_round(speed / 0.03125 * 3.6) * 0.03125 / 3.6)
++      speed = max(speed, 1)
++      for sign in (-1, 1):
++        self.safety.set_controls_allowed(True)
++        self._reset_speed_measurement(speed + 1)
++        self._tx(self._angle_cmd_msg(0, True))
++
++        # Stay within limits
++        max_angle_delta = round_angle(get_max_angle_delta_vm(speed, self.get_vm(car_name), self.get_baseline_limits())) * sign
++        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
++
++        # Don't change
++        self.safety.set_desired_angle_last(round(max_angle_delta * self.DEG_TO_CAN))
++        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
++
++        # Down
++        self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
++
++        # Inject too high rates
++        max_angle_delta = round_angle(get_max_angle_delta_vm(speed, self.get_vm(car_name), self.get_baseline_limits()), 6) * sign
++        self.assertFalse(self._tx(self._angle_cmd_msg(max_angle_delta, True)), vars(self.get_baseline_limits()))
++
++        # Don't change
++        self.safety.set_desired_angle_last(round(max_angle_delta * self.DEG_TO_CAN))
++        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
++
++        # Down
++        self.assertFalse(self._tx(self._angle_cmd_msg(0, True)))
++
++        # Recover
++        self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
++
++
+ class TestHyundaiCanfdLKASteeringLongEV(HyundaiLongitudinalBase, TestHyundaiCanfdLKASteeringEV):
+ 
+   TX_MSGS = [[0x50, 0], [0x1CF, 1], [0x2A4, 0], [0x51, 0], [0x730, 1], [0x12a, 1], [0x160, 1],
