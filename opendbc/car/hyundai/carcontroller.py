@@ -18,7 +18,8 @@ from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_a
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR
+from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, \
+  HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT, HYUNDAI_CANFD_PARAM_PLATFORM_ID_MASK
 from opendbc.car.interfaces import CarControllerBase
 
 from opendbc.sunnypilot.car.hyundai.escc import EsccCarController
@@ -210,8 +211,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
 
-      # if we are not the baseline model, we use the baseline model for further limits to prevent a panda block since it is hardcoded for baseline model.
-      if self.CP.carFingerprint != ANGLE_SAFETY_BASELINE_MODEL:
+      # Historically we applied the baseline Santa Fe model on top to match Panda's hardcoded baseline.
+      # Now, when Panda encodes a platform ID (e.g., EV9), it uses a platform-specific VM. In that case, skip the fallback.
+      panda_platform_id = 0
+      try:
+        if getattr(self.CP, 'safetyConfigs', None):
+          panda_platform_id = (self.CP.safetyConfigs[-1].safetyParam >> HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT) & HYUNDAI_CANFD_PARAM_PLATFORM_ID_MASK
+      except Exception:
+        panda_platform_id = 0
+
+      if (self.CP.carFingerprint != ANGLE_SAFETY_BASELINE_MODEL) and (panda_platform_id == 0):
         apply_angle = apply_steer_angle_limits_vm(apply_angle or desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive,
                                                   self.params, self.BASELINE_VM)
 
