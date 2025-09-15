@@ -115,15 +115,6 @@ def make_comm_control_msg(addr: int, bus: int, subfunction: int, message_type: i
   dat.extend([0x0] * (8 - len(dat)))
   return CanData(addr, bytes(dat), bus)
 
-def make_diagnostic_session_control_msg(addr: int, bus: int, session_type: int, suppress_response: bool = True):
-  # UDS 0x10 DiagnosticSessionControl, single-frame
-  # session_type is uds.SESSION_TYPE.*; suppress positive response via 0x80 on subfunction per UDS optional bit
-  # Note: some ECUs ignore the suppress bit for 0x10; included for consistency
-  sub = (session_type | 0x80) if suppress_response else session_type
-  dat = [0x02, uds.SERVICE_TYPE.DIAGNOSTIC_SESSION_CONTROL, sub]
-  dat.extend([0x0] * (8 - len(dat)))
-  return CanData(addr, bytes(dat), bus)
-
 
 def get_safety_config(safety_model: structs.CarParams.SafetyModel, safety_param: int = None) -> structs.CarParams.SafetyConfig:
   ret = structs.CarParams.SafetyConfig()
