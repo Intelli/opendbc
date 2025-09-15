@@ -1,0 +1,129 @@
+diff --git a/opendbc/car/hyundai/hyundaicanfd.py b/opendbc/car/hyundai/hyundaicanfd.py
+index 7e2f5ab..0000000 100644
+--- a/opendbc/car/hyundai/hyundaicanfd.py
++++ b/opendbc/car/hyundai/hyundaicanfd.py
+@@ -36,7 +36,7 @@ class CanBus(CanBusBase):
+   def CAM(self):
+     return self._cam
+ 
+-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon):
++def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon, force_lfa=False):
+   values = {
+     "LKA_OptUsmSta": 2,
+     "LKA_SysIndReq": 2 if enabled else 1,
+@@ -62,9 +62,9 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
+ 
+   ret = []
+   if CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
+     lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
+-    if CP.openpilotLongitudinalControl:
++    if CP.openpilotLongitudinalControl or force_lfa:
+       ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
+     ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, values))
+   else:
+     ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
+ 
+   return ret
+diff --git a/opendbc/car/hyundai/carcontroller.py b/opendbc/car/hyundai/carcontroller.py
+index c7b0a1a..0000000 100644
+--- a/opendbc/car/hyundai/carcontroller.py
++++ b/opendbc/car/hyundai/carcontroller.py
+@@ -10,6 +10,7 @@ except ImportError:
+   carlog.warning("Unable to import Params from openpilot.common.params.")
+   PARAMS_AVAILABLE = False
+ 
+ from opendbc.can import CANPacker
++from opendbc.car.can_definitions import CanData
+ from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
+ from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance, apply_steer_angle_limits_vm
+ from opendbc.car.common.conversions import Conversions as CV
+@@ -154,6 +155,8 @@ class CarController(CarControllerBase, EsccCarController, LongitudinalController
+     self.angle_torque_reduction_gain = 0
+ 
+     self.angle_enable_smoothing_factor = True
++
++    self.adas_silenced = False
+ 
+     if PARAMS_AVAILABLE:
+       try:
+         self.params.ANGLE_MIN_TORQUE_REDUCTION_GAIN = float(
+@@ -240,6 +243,31 @@ class CarController(CarControllerBase, EsccCarController, LongitudinalController
+       # After we've used the last angle wherever we needed it, we now update it.
+       self.apply_angle_last = apply_angle
+ 
++    # Conditionally silence ADAS on EV9 to bypass 120° clamp at low speeds
++    # Conditions: EV9, latActive, vEgo <= 32 km/h, and |requested angle| > 119.9°
++    if self.CP.flags & HyundaiFlags.CANFD and self.CP.carFingerprint == CAR.KIA_EV9:
++      need_adas_silence = CC.latActive and (CS.out.vEgo <= (32.0 * CV.KPH_TO_MS)) and (abs(self.apply_angle_last) > 119.9)
++
++      # Enter extended diagnostic and disable ADAS comms when needed
++      if need_adas_silence and not self.adas_silenced:
++        # UDS: 0x10 0x03 (Extended Diagnostic)
++        can_sends.append(CanData(0x730, b"\x02\x10\x03\x00\x00\x00\x00\x00", self.CAN.ECAN))
++        # UDS: 0x28 0x83 0x01 (Communication Control: Suppress Positive Response | Disable RX/Disable TX, Normal)
++        can_sends.append(CanData(0x730, b"\x03\x28\x83\x01\x00\x00\x00\x00", self.CAN.ECAN))
++        self.adas_silenced = True
++
++      # Re-enable ADAS comms when not needed
++      elif self.adas_silenced and not need_adas_silence:
++        # UDS: 0x28 0x80 0x01 (Communication Control: Suppress Positive Response | Enable RX/Enable TX, Normal)
++        can_sends.append(CanData(0x730, b"\x03\x28\x80\x01\x00\x00\x00\x00", self.CAN.ECAN))
++        self.adas_silenced = False
++
+     if not CC.latActive:
+       apply_torque = 0
+ 
+@@ -263,11 +291,13 @@ class CarController(CarControllerBase, EsccCarController, LongitudinalController
+     accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+     stopping = actuators.longControlState == LongCtrlState.stopping
+ 
+-    if self.CP.openpilotLongitudinalControl:
++    if self.CP.openpilotLongitudinalControl or self.adas_silenced:
+       # for longitudinal control, either radar or ADAS driving ECU
+       addr, bus = 0x7d0, self.CAN.ECAN if self.CP.flags & HyundaiFlags.CANFD else 0
+-      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value:
++      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value or self.adas_silenced:
+         addr, bus = 0x730, self.CAN.ECAN
+       can_sends.append(make_tester_present_msg(addr, bus, suppress_response=True))
+ 
+       # for blinkers
+       if self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
+         can_sends.append(make_tester_present_msg(0x7b1, self.CAN.ECAN, suppress_response=True))
+@@ -349,8 +379,8 @@ class CarController(CarControllerBase, EsccCarController, LongitudinalController
+     if self.CP.flags & HyundaiFlags.CANFD:
+       can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last
+-                                                           , self.lkas_icon))
++                                                           , self.lkas_icon, force_lfa=self.adas_silenced))
+ 
+     else:
+       can_sends.extend(self.create_can_msgs(apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel,
+                                             stopping, hud_control, actuators, CS, CC))
+diff --git a/opendbc/safety/modes/hyundai_canfd.h b/opendbc/safety/modes/hyundai_canfd.h
+index 1d4f5d1..0000000 100644
+--- a/opendbc/safety/modes/hyundai_canfd.h
++++ b/opendbc/safety/modes/hyundai_canfd.h
+@@ -236,11 +236,20 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+   }
+ 
+   // UDS: only tester present ("\x02\x3E\x80\x00\x00\x00\x00\x00") allowed on diagnostics address
+   if (((msg->addr == 0x730U) && hyundai_canfd_lka_steering) || ((msg->addr == 0x7D0U) && !hyundai_camera_scc)) {
+-    if ((GET_BYTES(msg, 0, 4) != 0x00803E02U) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
+-      tx = false;
+-    }
++    bool uds_allowed = (GET_BYTES(msg, 0, 4) == 0x00803E02U) && (GET_BYTES(msg, 4, 4) == 0x0U);
++    if (!uds_allowed && hyundai_canfd_lka_steering && hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
++      // Allow limited UDS for dynamic ADAS disable on EV9 angle-steering platforms:
++      // - 0x02 0x10 0x03 (Extended Diagnostic)
++      // - 0x03 0x28 0x83 0x01 (Comm Ctrl: Disable RX/Disable TX)
++      // - 0x03 0x28 0x80 0x01 (Comm Ctrl: Enable RX/Enable TX)
++      const uint32_t first = GET_BYTES(msg, 0, 4);
++      const uint32_t second = GET_BYTES(msg, 4, 4);
++      uds_allowed = ((first == 0x00031002U) && (second == 0x0U)) ||
++                    ((first == 0x01832803U) && (second == 0x0U)) ||
++                    ((first == 0x01808003U) && (second == 0x0U));
++    }
++    if (!uds_allowed) { tx = false; }
+   }
+ 
+   // ACCEL: safety check
+   if (msg->addr == 0x1a0U) {

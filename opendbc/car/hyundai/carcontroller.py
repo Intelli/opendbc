@@ -13,6 +13,7 @@ except ImportError:
   PARAMS_AVAILABLE = False
 
 from opendbc.can import CANPacker
+from opendbc.car.can_definitions import CanData
 from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance, apply_steer_angle_limits_vm
 from opendbc.car.common.conversions import Conversions as CV
@@ -160,6 +161,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # For future parametrization / tuning
     self.angle_enable_smoothing_factor = True
 
+    # Tracks whether ADAS comms are temporarily disabled to bypass EV9 120° clamp
+    self.adas_silenced = False
+
     self._params = Params() if PARAMS_AVAILABLE else None
     if PARAMS_AVAILABLE:
       self.params.ANGLE_MIN_TORQUE_REDUCTION_GAIN = parse_tq_rdc_gain(
@@ -246,6 +250,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # After we've used the last angle wherever we needed it, we now update it.
       self.apply_angle_last = apply_angle
 
+    # Note: ADAS (de)activation messages are appended after can_sends is initialized
+
     if not CC.latActive:
       apply_torque = 0
 
@@ -262,14 +268,33 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     can_sends = []
 
+    # Conditionally silence ADAS on EV9 to bypass 120° clamp at low speeds
+    # Conditions: EV9, angle steering, latActive, vEgo <= 32 km/h, and |requested angle| > 119.9°
+    if (self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and (self.CP.carFingerprint == CAR.KIA_EV9):
+      need_adas_silence = CC.latActive and (CS.out.vEgo <= (32.0 * CV.KPH_TO_MS)) and (abs(self.apply_angle_last) > 119.9)
+
+      # Enter extended diagnostic and disable ADAS communications when needed
+      if need_adas_silence and not self.adas_silenced:
+        # UDS: 0x10 0x03 (Extended Diagnostic)
+        can_sends.append(CanData(0x730, b"\x02\x10\x03\x00\x00\x00\x00\x00", self.CAN.ECAN))
+        # UDS: 0x28 0x83 0x01 (Communication Control: Suppress Positive Response | Disable RX/Disable TX, Normal)
+        can_sends.append(CanData(0x730, b"\x03\x28\x83\x01\x00\x00\x00\x00", self.CAN.ECAN))
+        self.adas_silenced = True
+
+      # Re-enable ADAS communications when not needed
+      elif self.adas_silenced and not need_adas_silence:
+        # UDS: 0x28 0x80 0x01 (Communication Control: Suppress Positive Response | Enable RX/Enable TX, Normal)
+        can_sends.append(CanData(0x730, b"\x03\x28\x80\x01\x00\x00\x00\x00", self.CAN.ECAN))
+        self.adas_silenced = False
+
     # *** common hyundai stuff ***
 
     # tester present - w/ no response (keeps relevant ECU disabled)
     if self.frame % 100 == 0 and not ((self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC) or self.ESCC.enabled) and \
-            self.CP.openpilotLongitudinalControl:
+            (self.CP.openpilotLongitudinalControl or self.adas_silenced):
       # for longitudinal control, either radar or ADAS driving ECU
       addr, bus = 0x7d0, self.CAN.ECAN if self.CP.flags & HyundaiFlags.CANFD else 0
-      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value:
+      if (self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value) or self.adas_silenced:
         addr, bus = 0x730, self.CAN.ECAN
       can_sends.append(make_tester_present_msg(addr, bus, suppress_response=True))
 
@@ -350,7 +375,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # steering control
     can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last
-                                                           , self.lkas_icon))
+                                                           , self.lkas_icon, force_lfa=self.adas_silenced))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     if self.frame % 5 == 0 and lka_steering:

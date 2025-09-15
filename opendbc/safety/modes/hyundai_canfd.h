@@ -249,10 +249,23 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
   }
 
   // UDS: only tester present ("\x02\x3E\x80\x00\x00\x00\x00\x00") allowed on diagnostics address
+  // For EV9 angle-steering with LKA steering, also allow:
+  //  - 0x02 0x10 0x03 (Extended Diagnostic)
+  //  - 0x03 0x28 0x83 0x01 (Communication Control: Disable RX/Disable TX, suppressed response)
+  //  - 0x03 0x28 0x80 0x01 (Communication Control: Enable RX/Enable TX, suppressed response)
   if (((msg->addr == 0x730U) && hyundai_canfd_lka_steering) || ((msg->addr == 0x7D0U) && !hyundai_camera_scc)) {
-    if ((GET_BYTES(msg, 0, 4) != 0x00803E02U) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
-      tx = false;
+    bool uds_allowed = (GET_BYTES(msg, 0, 4) == 0x00803E02U) && (GET_BYTES(msg, 4, 4) == 0x0U);
+    if (!uds_allowed && hyundai_canfd_lka_steering && hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
+      const uint32_t first = GET_BYTES(msg, 0, 4);
+      const uint32_t second = GET_BYTES(msg, 4, 4);
+      // 0x02 0x10 0x03
+      // 0x03 0x28 0x83 0x01
+      // 0x03 0x28 0x80 0x01
+      uds_allowed = ((first == 0x00031002U) && (second == 0x0U)) ||
+                    ((first == 0x01832803U) && (second == 0x0U)) ||
+                    ((first == 0x01808003U) && (second == 0x0U));
     }
+    if (!uds_allowed) { tx = false; }
   }
 
   // ACCEL: safety check
