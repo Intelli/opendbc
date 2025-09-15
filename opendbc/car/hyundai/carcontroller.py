@@ -13,13 +13,14 @@ except ImportError:
   PARAMS_AVAILABLE = False
 
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
+from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, make_comm_control_msg, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance, apply_steer_angle_limits_vm
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, \
   HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT, HYUNDAI_CANFD_PARAM_PLATFORM_ID_MASK
+from opendbc.car import uds
 from opendbc.car.interfaces import CarControllerBase
 
 from opendbc.sunnypilot.car.hyundai.escc import EsccCarController
@@ -283,16 +284,28 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # *** CAN/CAN FD specific ***
     if self.CP.flags & HyundaiFlags.CANFD:
       # EV9 angle-steering: keep ADAS in diagnostic session at low speeds (<=32 km/h) with hysteresis
-      # This bypasses ADAS angle clamps to allow higher steering angles at parking/turning speeds.
+      # and disable ADAS normal communications via UDS CommunicationControl, but ONLY while openpilot
+      # lateral is active. This bypasses ADAS angle clamps at parking/turning speeds while OP is steering.
       if (self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and (self.CP.carFingerprint == CAR.KIA_EV9):
         lower = (32 * CV.KPH_TO_MS)
         upper = (34 * CV.KPH_TO_MS)
-        session = getattr(self, "_adas_diag_active", False)
-        if CS.out.vEgoRaw <= lower:
-          session = True
-        elif CS.out.vEgoRaw > upper:
+        prev_session = self._adas_diag_active
+        session = prev_session
+        if not CC.latActive:
           session = False
+        else:
+          if CS.out.vEgoRaw <= lower:
+            session = True
+          elif CS.out.vEgoRaw > upper:
+            session = False
         self._adas_diag_active = session
+        # On edge into session: disable normal comm (DisableRxDisableTx for NORMAL messages)
+        if session and not prev_session:
+          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
+        # On edge out of session: re-enable normal comm
+        if (not session) and prev_session:
+          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
+        # Keep the diagnostic session alive while disabled and OP is steering
         if session and (self.frame % 100 == 0):
           can_sends.append(make_tester_present_msg(0x730, self.CAN.ECAN, suppress_response=True))
       can_sends.extend(self.create_canfd_msgs(apply_steer_req, apply_torque, set_speed_in_units, accel,

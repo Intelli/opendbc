@@ -1,24 +1,72 @@
+diff --git a/opendbc/car/__init__.py b/opendbc/car/__init__.py
+index 11111111..22222222 100644
+--- a/opendbc/car/__init__.py
++++ b/opendbc/car/__init__.py
+@@ -90,6 +90,18 @@ def make_tester_present_msg(addr, bus, subaddr=None, suppress_response=False):
+   dat.extend([0x0] * (8 - len(dat)))
+   return CanData(addr, bytes(dat), bus)
+
+ +def make_comm_control_msg(addr: int, bus: int, subfunction: int, message_type: int, suppress_response: bool = True):
+ +  # UDS 0x28 CommunicationControl, single-frame
+ +  # subfunction may include suppress-positive-response bit (0x80)
+ +  dat = [0x03, uds.SERVICE_TYPE.COMMUNICATION_CONTROL]
+ +  dat.append((subfunction | 0x80) if suppress_response else subfunction)
+ +  dat.append(message_type)
+ +  dat.extend([0x0] * (8 - len(dat)))
+ +  return CanData(addr, bytes(dat), bus)
+
 diff --git a/opendbc/car/hyundai/carcontroller.py b/opendbc/car/hyundai/carcontroller.py
-index d3dfff01..abcd1234 100644
+index d3dfff01..efef7777 100644
 --- a/opendbc/car/hyundai/carcontroller.py
 +++ b/opendbc/car/hyundai/carcontroller.py
-@@ -279,6 +279,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -16,7 +16,9 @@ from opendbc.can import CANPacker
+ from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
+ from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance, apply_steer_angle_limits_vm
+ from opendbc.car.common.conversions import Conversions as CV
+ from opendbc.car.hyundai import hyundaicanfd, hyundaican
+ from opendbc.car.hyundai.hyundaicanfd import CanBus
+ from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, \
+   HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT, HYUNDAI_CANFD_PARAM_PLATFORM_ID_MASK
++from opendbc.car import uds
++from opendbc.car import make_comm_control_msg
+ from opendbc.car.interfaces import CarControllerBase
+@@ -140,6 +142,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+     self.angle_torque_reduction_gain_controller = TorqueReductionGainController(
+       angle_threshold=.3,
+       debounce_time=.1,
+       min_gain=self.params.ANGLE_ACTIVE_TORQUE_REDUCTION_GAIN,
+       max_gain=self.params.ANGLE_MAX_TORQUE_REDUCTION_GAIN,
+       ramp_up_rate=self.params.ANGLE_RAMP_UP_TORQUE_REDUCTION_RATE,
+       ramp_down_rate=self.params.ANGLE_RAMP_DOWN_TORQUE_REDUCTION_RATE
+     )
++    # Track ADAS diagnostic session state for EV9 quiet-ADAS below 32 km/h
++    self._adas_diag_active: bool = False
+@@ -279,6 +283,27 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
  
      # *** CAN/CAN FD specific ***
      if self.CP.flags & HyundaiFlags.CANFD:
- +      # Angle-steering cars: keep ADAS in diagnostic session at low speeds (<=32 km/h) with hysteresis
- +      # This bypasses ADAS angle clamps to allow higher steering angles at parking/turning speeds.
- +      if (self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and (self.CP.carFingerprint == CAR.KIA_EV9):
- +        lower = (32 * CV.KPH_TO_MS)
- +        upper = (34 * CV.KPH_TO_MS)
- +        session = getattr(self, "_adas_diag_active", False)
- +        if CS.out.vEgoRaw <= lower:
- +          session = True
- +        elif CS.out.vEgoRaw > upper:
- +          session = False
- +        self._adas_diag_active = session
- +        if session and (self.frame % 100 == 0):
- +          can_sends.append(make_tester_present_msg(0x730, self.CAN.ECAN, suppress_response=True))
++      # EV9 angle-steering: keep ADAS in diagnostic session at low speeds (<=32 km/h) with hysteresis
++      # and disable ADAS normal communications via UDS CommunicationControl. This bypasses
++      # ADAS angle clamps to allow higher steering angles at parking/turning speeds.
++      if (self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and (self.CP.carFingerprint == CAR.KIA_EV9):
++        lower = (32 * CV.KPH_TO_MS)
++        upper = (34 * CV.KPH_TO_MS)
++        prev_session = self._adas_diag_active
++        session = prev_session
++        if CS.out.vEgoRaw <= lower:
++          session = True
++        elif CS.out.vEgoRaw > upper:
++          session = False
++        self._adas_diag_active = session
++        # On edge into session: disable normal comm (DisableRxDisableTx for NORMAL messages)
++        if session and not prev_session:
++          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
++        # On edge out of session: re-enable normal comm
++        if (not session) and prev_session:
++          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
++        # Keep the diagnostic session alive while disabled
++        if session and (self.frame % 100 == 0):
++          can_sends.append(make_tester_present_msg(0x730, self.CAN.ECAN, suppress_response=True))
  
        can_sends.extend(self.create_canfd_msgs(apply_steer_req, apply_torque, set_speed_in_units, accel,
                                                stopping, hud_control, CS, CC))
@@ -28,126 +76,130 @@ diff --git a/opendbc/safety/modes/hyundai_canfd.h b/opendbc/safety/modes/hyundai
 index 6b2e7db3..efef5678 100644
 --- a/opendbc/safety/modes/hyundai_canfd.h
 +++ b/opendbc/safety/modes/hyundai_canfd.h
-@@ -249,7 +249,8 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+@@ -249,13 +249,26 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
    }
- 
-   // UDS: only tester present ("\x02\x3E\x80\x00\x00\x00\x00\x00") allowed on diagnostics address
--  if (((msg->addr == 0x730U) && hyundai_canfd_lka_steering) || ((msg->addr == 0x7D0U) && !hyundai_camera_scc)) {
-+  // Allow ADAS tester-present (0x730) on LKA steering platforms and on angle-steering platforms
-+  if (((msg->addr == 0x730U) && (hyundai_canfd_lka_steering || (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)))) || ((msg->addr == 0x7D0U) && !hyundai_camera_scc)) {
+
+   // UDS: only specific diag frames allowed on diagnostics addresses
+   // - 0x730 (ADAS): allow tester-present and communication-control only
+   //   - TesterPresent:  02 3E 80 00 00 00 00 00
+   //   - CommControl:    03 28 83 01 00 00 00 00 (DisableRxDisableTx, NORMAL)
+   //                     03 28 00 01 00 00 00 00 (EnableRxEnableTx, NORMAL)
+   // - 0x7D0 (RADAR): allow tester-present only when not camera_scc
+   if ((msg->addr == 0x730U) && (hyundai_canfd_lka_steering || (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)))) {
+     const uint32_t top4 = GET_BYTES(msg, 0, 4);
+     bool ok = (top4 == 0x00803E02U)  // TesterPresent
+            || (top4 == 0x01832803U)  // CommControl disable (0x28, 0x83, 0x01)
+            || (top4 == 0x01002803U); // CommControl enable  (0x28, 0x00, 0x01)
+     if ((!ok) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
+       tx = false;
+     }
+   }
+   if ((msg->addr == 0x7D0U) && !hyundai_camera_scc) {
      if ((GET_BYTES(msg, 0, 4) != 0x00803E02U) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
        tx = false;
      }
    }
-@@ -320,6 +321,14 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+@@ -320,6 +333,14 @@ static safety_config hyundai_canfd_init(uint16_t param) {
      HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, false)
    };
- 
-+  // Angle-steering variant: allow ADAS tester-present (0x730 on ECAN bus 0)
-+  static const CanMsg HYUNDAI_CANFD_LFA_STEERING_TX_MSGS_ANGLE[] = {
-+    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
-+    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0)
-+    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, false)
-+    {0x730, 0,  8, .check_relay = false},  /* ADAS tester present */
-+  };
-+
+
+ +  // Angle-steering variant: allow ADAS tester-present (0x730 on ECAN bus 0)
+ +  static const CanMsg HYUNDAI_CANFD_LFA_STEERING_TX_MSGS_ANGLE[] = {
+ +    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
+ +    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0)
+ +    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, false)
+ +    {0x730, 0,  8, .check_relay = false},  /* ADAS tester present */
+ +  };
+ +
    // ADRV_0x160 is checked for radar liveness
    static const CanMsg HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS[] = {
      HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
-@@ -330,6 +339,16 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+@@ -330,6 +351,16 @@ static safety_config hyundai_canfd_init(uint16_t param) {
      {0x7D0, 0, 8, .check_relay = false},  // tester present for radar ECU disable
    };
- 
-+  // Angle-steering variant: include ADAS tester-present on ECAN bus 0
-+  static const CanMsg HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS_ANGLE[] = {
-+    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
-+    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0)
-+    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, true)
-+    {0x160, 0, 16, .check_relay = true}, /* ADRV_0x160 */
-+    {0x7D0, 0,  8, .check_relay = false}, /* radar ECU tester present */
-+    {0x730, 0,  8, .check_relay = false}, /* ADAS tester present */
-+  };
-+
+
+ +  // Angle-steering variant: include ADAS tester-present on ECAN bus 0
+ +  static const CanMsg HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS_ANGLE[] = {
+ +    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2)
+ +    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0)
+ +    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, true)
+ +    {0x160, 0, 16, .check_relay = true}, /* ADRV_0x160 */
+ +    {0x7D0, 0,  8, .check_relay = false}, /* radar ECU tester present */
+ +    {0x730, 0,  8, .check_relay = false}, /* ADAS tester present */
+ +  };
+ +
    // ADRV_0x160 is checked for relay malfunction
  #define HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS(longitudinal) \
      HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2) \
-@@ -338,6 +357,14 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+@@ -338,6 +369,14 @@ static safety_config hyundai_canfd_init(uint16_t param) {
      HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, (longitudinal)) \
      {0x160, 0, 16, .check_relay = (longitudinal)}, /* ADRV_0x160 */ \
- 
-+  // Angle-steering variant: append ADAS tester-present on ECAN bus 0
-+#define HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(longitudinal) \
-+    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2) \
-+    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0) \
-+    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, (longitudinal)) \
-+    {0x160, 0, 16, .check_relay = (longitudinal)}, /* ADRV_0x160 */ \
-+    {0x730, 0,  8, .check_relay = false},          /* ADAS tester present */ \
-+
+
+ +  // Angle-steering variant: append ADAS tester-present on ECAN bus 0
+ +#define HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(longitudinal) \
+ +    HYUNDAI_CANFD_CRUISE_BUTTON_TX_MSGS(2) \
+ +    HYUNDAI_CANFD_LFA_STEERING_COMMON_TX_MSGS(0) \
+ +    HYUNDAI_CANFD_SCC_CONTROL_COMMON_TX_MSGS(0, (longitudinal)) \
+ +    {0x160, 0, 16, .check_relay = (longitudinal)}, /* ADRV_0x160 */ \
+ +    {0x730, 0,  8, .check_relay = false},          /* ADAS tester present */ \
+ +
    hyundai_common_init(param);
- 
+
    gen_crc_lookup_table_16(0x1021, hyundai_canfd_crc_lut);
-@@ -377,11 +404,21 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+@@ -377,11 +416,21 @@ static safety_config hyundai_canfd_init(uint16_t param) {
        if (hyundai_canfd_alt_buttons) {
          SET_RX_CHECKS(hyundai_canfd_alt_buttons_long_rx_checks, ret);
        } else {
          SET_RX_CHECKS(hyundai_canfd_long_rx_checks, ret);
        }
- 
--      if (hyundai_camera_scc) {
--        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
--      } else {
--        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS, ret);
--      }
-+      if (hyundai_camera_scc) {
-+        if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
-+          static CanMsg hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle[] = {
-+            HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(true)
-+          };
-+          SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle, ret);
-+        } else {
-+          SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
-+        }
-+      } else {
-+        if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
-+          SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS_ANGLE, ret);
-+        } else {
-+          SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS, ret);
-+        }
-+      }
-     }
- 
-   } else {
-@@ -411,7 +448,11 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+
+ -      if (hyundai_camera_scc) {
+ -        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
+ -      } else {
+ -        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS, ret);
+ -      }
+ +      if (hyundai_camera_scc) {
+ +        if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
+ +          static CanMsg hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle[] = {
+ +            HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(true)
+ +          };
+ +          SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle, ret);
+ +        } else {
+ +          SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
+ +        }
+ +      } else {
+ +        if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
+ +          SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS_ANGLE, ret);
+ +        } else {
+ +          SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_LONG_TX_MSGS, ret);
+ +        }
+ +      }
+@@ -411,7 +460,11 @@ static safety_config hyundai_canfd_init(uint16_t param) {
        static RxCheck hyundai_canfd_alt_buttons_radar_scc_rx_checks[] = {
          HYUNDAI_CANFD_ALT_BUTTONS_RX_CHECKS(0)
          HYUNDAI_CANFD_SCC_ADDR_CHECK(0)
        };
- 
--      SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS, ret);
-+      if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
-+        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS_ANGLE, ret);
-+      } else {
-+        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS, ret);
-+      }
- 
-       if (hyundai_canfd_alt_buttons) {
-         SET_RX_CHECKS(hyundai_canfd_alt_buttons_radar_scc_rx_checks, ret);
-       } else {
-         SET_RX_CHECKS(hyundai_canfd_radar_scc_rx_checks, ret);
-@@ -438,8 +479,15 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+
+ -      SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS, ret);
+ +      if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
+ +        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS_ANGLE, ret);
+ +      } else {
+ +        SET_TX_MSGS(HYUNDAI_CANFD_LFA_STEERING_TX_MSGS, ret);
+ +      }
+@@ -438,8 +491,15 @@ static safety_config hyundai_canfd_init(uint16_t param) {
        static CanMsg hyundai_canfd_lfa_steering_camera_scc_tx_msgs[] = {
          HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS(false)
        };
- 
--      SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
-+      if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
-+        static CanMsg hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle[] = {
-+          HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(false)
-+        };
-+        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle, ret);
-+      } else {
-+        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
-+      }
+
+ -      SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
+ +      if (hyundai_canfd_angle_steering && (hyundai_canfd_platform_id == 1U)) {
+ +        static CanMsg hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle[] = {
+ +          HYUNDAI_CANFD_LFA_STEERING_CAMERA_SCC_TX_MSGS_ANGLE(false)
+ +        };
+ +        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs_angle, ret);
+ +      } else {
+ +        SET_TX_MSGS(hyundai_canfd_lfa_steering_camera_scc_tx_msgs, ret);
+ +      }
 
        if (hyundai_canfd_alt_buttons) {
          SET_RX_CHECKS(hyundai_canfd_alt_buttons_rx_checks, ret);
@@ -159,64 +211,90 @@ diff --git a/opendbc/safety/tests/test_hyundai_canfd.py b/opendbc/safety/tests/t
 index cbb9a4ef..9999bbbb 100755
 --- a/opendbc/safety/tests/test_hyundai_canfd.py
 +++ b/opendbc/safety/tests/test_hyundai_canfd.py
-@@ -682,5 +682,40 @@ class TestHyundaiCanfdLFASteeringLongAltButtons(TestHyundaiCanfdLFASteeringLongB
+@@ -682,5 +682,73 @@ class TestHyundaiCanfdLFASteeringLongAltButtons(TestHyundaiCanfdLFASteeringLongB
      pass
- 
- 
-+# Angle steering: focused tests for ADAS tester-present allowance on LFA platforms
-+class TestHyundaiCanfdAngleLFALongTesterPresent(unittest.TestCase):
-+  def setUp(self):
-+    self.packer = CANPackerPanda("hyundai_canfd_generated")
-+    self.safety = libsafety_py.libsafety
-+    # Longitudinal + angle-steering (LFA path), ADAS on ECAN bus 0
-+    ev9_param = (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
-    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.CANFD_ANGLE_STEERING | ev9_param)
-+    self.safety.init_tests()
-+
-+  def _tx(self, msg):
-+    return self.safety.safety_tx_hook(msg)
-+
-+  def test_tester_present_allowed(self):
-+    good = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x3E\x80\x00\x00\x00\x00\x00")
-+    bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\xAA\xAA\x00\x00\x00\x00\x00")
-+    self.assertTrue(self._tx(good))
-+    self.assertFalse(self._tx(bad))
-+
-+class TestHyundaiCanfdAngleLFANonLongCameraTesterPresent(unittest.TestCase):
-+  def setUp(self):
-+    self.packer = CANPackerPanda("hyundai_canfd_generated")
-+    self.safety = libsafety_py.libsafety
-+    # Non-longitudinal + camera SCC + angle-steering
-+    ev9_param = (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
-    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.CAMERA_SCC | HyundaiSafetyFlags.CANFD_ANGLE_STEERING | ev9_param)
-+    self.safety.init_tests()
-+
-+  def _tx(self, msg):
-+    return self.safety.safety_tx_hook(msg)
-+
-+  def test_tester_present_allowed(self):
-+    good = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x3E\x80\x00\x00\x00\x00\x00")
-+    bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\xAA\xAA\x00\x00\x00\x00\x00")
-+    self.assertTrue(self._tx(good))
-+    self.assertFalse(self._tx(bad))
-+
-+class TestHyundaiCanfdAngleLFANonLongRadarTesterPresent(unittest.TestCase):
-+  def setUp(self):
-+    self.packer = CANPackerPanda("hyundai_canfd_generated")
-+    self.safety = libsafety_py.libsafety
-+    # Non-longitudinal + radar SCC + angle-steering
-+    ev9_param = (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
-    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.CANFD_ANGLE_STEERING | ev9_param)
-+    self.safety.init_tests()
-+
-+  def _tx(self, msg):
-+    return self.safety.safety_tx_hook(msg)
-+
-+  def test_tester_present_allowed(self):
-+    good = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x3E\x80\x00\x00\x00\x00\x00")
-+    bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\xAA\xAA\x00\x00\x00\x00\x00")
-+    self.assertTrue(self._tx(good))
-+    self.assertFalse(self._tx(bad))
 
- if __name__ == "__main__":
-   unittest.main()
+
+ +# Angle steering: focused tests for ADAS tester-present allowance on LFA platforms
+ +class TestHyundaiCanfdAngleLFALongTesterPresent(unittest.TestCase):
+ +  # Avoid inclusion in cross-safety TX allowlist checks
+ +  TX_MSGS = None
+   def setUp(self):
+     self.packer = CANPackerPanda("hyundai_canfd_generated")
+     self.safety = libsafety_py.libsafety
+     # Longitudinal + angle-steering (LFA path), ADAS on ECAN bus 0
+     ev9_param = (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
+     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.CANFD_ANGLE_STEERING | ev9_param)
+     self.safety.init_tests()
+
+   def _tx(self, msg):
+     return self.safety.safety_tx_hook(msg)
+
+   def test_tester_present_allowed(self):
+     good = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x3E\x80\x00\x00\x00\x00\x00")
+     bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\xAA\xAA\x00\x00\x00\x00\x00")
+     self.assertTrue(self._tx(good))
+     self.assertFalse(self._tx(bad))
+
+   def test_comm_control_allowed(self):
+     disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
+     enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
+     reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
+     self.assertTrue(self._tx(disable))
+     self.assertTrue(self._tx(enable))
+     self.assertFalse(self._tx(reject))
+
+ +class TestHyundaiCanfdAngleLFANonLongCameraTesterPresent(unittest.TestCase):
+ +  TX_MSGS = None
+   def setUp(self):
+     self.packer = CANPackerPanda("hyundai_canfd_generated")
+     self.safety = libsafety_py.libsafety
+     # Non-longitudinal + camera SCC + angle-steering
+     ev9_param = (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
+     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.CAMERA_SCC | HyundaiSafetyFlags.CANFD_ANGLE_STEERING | ev9_param)
+     self.safety.init_tests()
+
+   def _tx(self, msg):
+     return self.safety.safety_tx_hook(msg)
+
+   def test_tester_present_allowed(self):
+     good = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x3E\x80\x00\x00\x00\x00\x00")
+     bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\xAA\xAA\x00\x00\x00\x00\x00")
+     self.assertTrue(self._tx(good))
+     self.assertFalse(self._tx(bad))
+
+   def test_comm_control_allowed(self):
+     disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
+     enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
+     reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
+     self.assertTrue(self._tx(disable))
+     self.assertTrue(self._tx(enable))
+     self.assertFalse(self._tx(reject))
+
+ +class TestHyundaiCanfdAngleLFANonLongRadarTesterPresent(unittest.TestCase):
+ +  TX_MSGS = None
+   def setUp(self):
+     self.packer = CANPackerPanda("hyundai_canfd_generated")
+     self.safety = libsafety_py.libsafety
+     # Non-longitudinal + radar SCC + angle-steering
+     ev9_param = (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
+     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, HyundaiSafetyFlags.CANFD_ANGLE_STEERING | ev9_param)
+     self.safety.init_tests()
+
+   def _tx(self, msg):
+     return self.safety.safety_tx_hook(msg)
+
+   def test_tester_present_allowed(self):
+     good = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x3E\x80\x00\x00\x00\x00\x00")
+     bad = libsafety_py.make_CANPacket(0x730, 0, b"\x03\xAA\xAA\x00\x00\x00\x00\x00")
+     self.assertTrue(self._tx(good))
+     self.assertFalse(self._tx(bad))
+
+   def test_comm_control_allowed(self):
+     disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
+     enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
+     reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
+     self.assertTrue(self._tx(disable))
+     self.assertTrue(self._tx(enable))
+     self.assertFalse(self._tx(reject))
+
