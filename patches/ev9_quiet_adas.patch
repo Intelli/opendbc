@@ -52,17 +52,15 @@ index d3dfff01..efef7777 100644
  
      # *** CAN/CAN FD specific ***
      if self.CP.flags & HyundaiFlags.CANFD:
- +      # EV9 angle-steering: bypass ADAS entirely (CommControl disable of NORMAL & NETWORK MGMT)
- +      # at low speeds (<=32 km/h) ONLY while openpilot lateral is active AND the requested
- +      # angle exceeds the ADAS clamp (|angle| > 120 deg). Use hysteresis on speed (32/34 km/h).
+ +      # EV9 angle-steering: keep ADAS in diagnostic session at low speeds (<=32 km/h) with hysteresis
+ +      # and disable ADAS normal communications via UDS CommunicationControl, but ONLY while openpilot
+ +      # lateral is active. This bypasses ADAS angle clamps to allow higher steering angles at parking/turning speeds.
  +      if (self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and (self.CP.carFingerprint == CAR.KIA_EV9):
  +        lower = (32 * CV.KPH_TO_MS)
  +        upper = (34 * CV.KPH_TO_MS)
  +        prev_session = self._adas_diag_active
  +        session = prev_session
- +        # Only bypass when OP is actively steering and angle request exceeds 120 deg
- +        angle_bypass = abs(actuators.steeringAngleDeg) > 120.0
- +        if not CC.latActive or not angle_bypass:
+ +        if not CC.latActive:
  +          session = False
  +        else:
  +          if CS.out.vEgoRaw <= lower:
@@ -70,13 +68,13 @@ index d3dfff01..efef7777 100644
  +          elif CS.out.vEgoRaw > upper:
  +            session = False
  +        self._adas_diag_active = session
- +        # On edge into session: switch to extended diagnostics and disable normal & NM comm
+ +        # On edge into session: switch to extended diagnostics and disable normal comm
  +        if session and not prev_session:
  +          can_sends.append(make_diagnostic_session_control_msg(0x730, self.CAN.ECAN, uds.SESSION_TYPE.EXTENDED_DIAGNOSTIC, suppress_response=True))
- +          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL_AND_NETWORK_MANAGEMENT, suppress_response=True))
- +        # On edge out of session: re-enable normal & NM comm and return to default session
+ +          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
+ +        # On edge out of session: re-enable normal comm and return to default session
  +        if (not session) and prev_session:
- +          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL_AND_NETWORK_MANAGEMENT, suppress_response=True))
+ +          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
  +          can_sends.append(make_diagnostic_session_control_msg(0x730, self.CAN.ECAN, uds.SESSION_TYPE.DEFAULT, suppress_response=True))
  +        # Keep the diagnostic session alive while disabled and OP is steering
  +        if session and (self.frame % 100 == 0):
@@ -107,9 +105,7 @@ index 6b2e7db3..efef5678 100644
             || (top4 == 0x00831002U)  // DiagSessionControl EXTENDED (0x10, 0x83)
             || (top4 == 0x00811002U)  // DiagSessionControl DEFAULT  (0x10, 0x81)
             || (top4 == 0x01832803U)  // CommControl disable (0x28, 0x83, 0x01)
-            || (top4 == 0x01002803U)  // CommControl enable  (0x28, 0x00, 0x01)
-            || (top4 == 0x03832803U)  // CommControl disable (0x28, 0x83, 0x03)
-            || (top4 == 0x03002803U); // CommControl enable  (0x28, 0x00, 0x03)
+            || (top4 == 0x01002803U); // CommControl enable  (0x28, 0x00, 0x01)
      if ((!ok) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
        tx = false;
      }
@@ -144,21 +140,13 @@ index cbb9a4ef..9999bbbb 100755
      self.assertTrue(self._tx(good))
      self.assertFalse(self._tx(bad))
 
-  def test_comm_control_allowed(self):
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
-
-  def test_comm_control_nm_allowed(self):
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x03\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x03\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x03\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
+   def test_comm_control_allowed(self):
+     disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
+     enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
+     reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
+     self.assertTrue(self._tx(disable))
+     self.assertTrue(self._tx(enable))
+     self.assertFalse(self._tx(reject))
 
  +  def test_diag_session_allowed(self):
  +    ext = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x83\x00\x00\x00\x00\x00")
@@ -187,21 +175,13 @@ index cbb9a4ef..9999bbbb 100755
      self.assertTrue(self._tx(good))
      self.assertFalse(self._tx(bad))
 
-  def test_comm_control_allowed(self):
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
-
-  def test_comm_control_nm_allowed(self):
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x03\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x03\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x03\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
+   def test_comm_control_allowed(self):
+     disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
+     enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
+     reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
+     self.assertTrue(self._tx(disable))
+     self.assertTrue(self._tx(enable))
+     self.assertFalse(self._tx(reject))
 
  +  def test_diag_session_allowed(self):
  +    ext = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x83\x00\x00\x00\x00\x00")
@@ -230,21 +210,13 @@ index cbb9a4ef..9999bbbb 100755
      self.assertTrue(self._tx(good))
      self.assertFalse(self._tx(bad))
 
-  def test_comm_control_allowed(self):
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
-
-  def test_comm_control_nm_allowed(self):
-    disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x03\x00\x00\x00\x00")
-    enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x03\x00\x00\x00\x00")
-    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x03\x00\x00\x00\x00")
-    self.assertTrue(self._tx(disable))
-    self.assertTrue(self._tx(enable))
-    self.assertFalse(self._tx(reject))
+   def test_comm_control_allowed(self):
+     disable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x01\x00\x00\x00\x00")
+     enable = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x01\x00\x00\x00\x00")
+     reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
+     self.assertTrue(self._tx(disable))
+     self.assertTrue(self._tx(enable))
+     self.assertFalse(self._tx(reject))
 
  +  def test_diag_session_allowed(self):
  +    ext = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x83\x00\x00\x00\x00\x00")
@@ -328,9 +300,7 @@ index 6b2e7db3..efef5678 100644
      const uint32_t top4 = GET_BYTES(msg, 0, 4);
      bool ok = (top4 == 0x00803E02U)  // TesterPresent
             || (top4 == 0x01832803U)  // CommControl disable (0x28, 0x83, 0x01)
-            || (top4 == 0x01002803U)  // CommControl enable  (0x28, 0x00, 0x01)
-            || (top4 == 0x03832803U)  // CommControl disable (0x28, 0x83, 0x03)
-            || (top4 == 0x03002803U); // CommControl enable  (0x28, 0x00, 0x03)
+            || (top4 == 0x01002803U); // CommControl enable  (0x28, 0x00, 0x01)
      if ((!ok) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
        tx = false;
      }

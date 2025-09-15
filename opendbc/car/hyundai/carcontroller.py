@@ -283,17 +283,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # *** CAN/CAN FD specific ***
     if self.CP.flags & HyundaiFlags.CANFD:
-      # EV9 angle-steering: bypass ADAS entirely (CommControl disable of NORMAL & NETWORK MGMT)
-      # at low speeds (<=32 km/h) ONLY while openpilot lateral is active AND the requested
-      # angle exceeds the ADAS clamp (|angle| > 120 deg). Use hysteresis on speed (32/34 km/h).
+      # EV9 angle-steering: keep ADAS in diagnostic session at low speeds (<=32 km/h) with hysteresis
+      # and disable ADAS normal communications via UDS CommunicationControl, but ONLY while openpilot
+      # lateral is active. This bypasses ADAS angle clamps at parking/turning speeds while OP is steering.
       if (self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and (self.CP.carFingerprint == CAR.KIA_EV9):
         lower = (32 * CV.KPH_TO_MS)
         upper = (34 * CV.KPH_TO_MS)
         prev_session = self._adas_diag_active
         session = prev_session
-        # Only bypass when OP is actively steering and angle request exceeds 120 deg
-        angle_bypass = abs(actuators.steeringAngleDeg) > 120.0
-        if not CC.latActive or not angle_bypass:
+        if not CC.latActive:
           session = False
         else:
           if CS.out.vEgoRaw <= lower:
@@ -301,14 +299,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
           elif CS.out.vEgoRaw > upper:
             session = False
         self._adas_diag_active = session
-        # On edge into session: switch to extended diagnostics and disable normal & NM comm
+        # On edge into session: switch to extended diagnostics and disable normal comm
         if session and not prev_session:
-          # 0x10 Extended + 0x28 DisableRxDisableTx NORMAL_AND_NETWORK_MANAGEMENT
+          # 0x10 Extended + 0x28 DisableRxDisableTx NORMAL
           can_sends.append(make_diagnostic_session_control_msg(0x730, self.CAN.ECAN, uds.SESSION_TYPE.EXTENDED_DIAGNOSTIC, suppress_response=True))
-          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL_AND_NETWORK_MANAGEMENT, suppress_response=True))
-        # On edge out of session: re-enable normal & NM comm and return to default session
+          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
+        # On edge out of session: re-enable normal comm and return to default session
         if (not session) and prev_session:
-          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL_AND_NETWORK_MANAGEMENT, suppress_response=True))
+          can_sends.append(make_comm_control_msg(0x730, self.CAN.ECAN, uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL, suppress_response=True))
           can_sends.append(make_diagnostic_session_control_msg(0x730, self.CAN.ECAN, uds.SESSION_TYPE.DEFAULT, suppress_response=True))
         # Keep the diagnostic session alive while disabled and OP is steering
         if session and (self.frame % 100 == 0):

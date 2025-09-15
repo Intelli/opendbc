@@ -262,9 +262,7 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
            || (top4 == 0x00831002U)  // DiagSessionControl EXTENDED (0x10, 0x83)
            || (top4 == 0x00811002U)  // DiagSessionControl DEFAULT  (0x10, 0x81)
            || (top4 == 0x01832803U)  // CommControl disable (0x28, 0x83, 0x01)
-           || (top4 == 0x01002803U)  // CommControl enable  (0x28, 0x00, 0x01)
-           || (top4 == 0x03832803U)  // CommControl disable (0x28, 0x83, 0x03)
-           || (top4 == 0x03002803U); // CommControl enable  (0x28, 0x00, 0x03)
+           || (top4 == 0x01002803U); // CommControl enable  (0x28, 0x00, 0x01)
     if ((!ok) || (GET_BYTES(msg, 4, 4) != 0x0U)) {
       tx = false;
     }
