@@ -713,6 +713,15 @@ class TestHyundaiCanfdAngleLFALongTesterPresent(unittest.TestCase):
     self.assertTrue(self._tx(enable))
     self.assertFalse(self._tx(reject))
 
+  def test_comm_control_nm_allowed(self):
+    # Disable/Enable normal+network management
+    disable_nm = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x03\x00\x00\x00\x00")
+    enable_nm = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x03\x00\x00\x00\x00")
+    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x03\x00\x00\x00\x00")
+    self.assertTrue(self._tx(disable_nm))
+    self.assertTrue(self._tx(enable_nm))
+    self.assertFalse(self._tx(reject))
+
   def test_diag_session_allowed(self):
     ext = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x83\x00\x00\x00\x00\x00")
     dft = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x81\x00\x00\x00\x00\x00")
@@ -750,6 +759,14 @@ class TestHyundaiCanfdAngleLFANonLongCameraTesterPresent(unittest.TestCase):
     self.assertTrue(self._tx(enable))
     self.assertFalse(self._tx(reject))
 
+  def test_comm_control_nm_allowed(self):
+    disable_nm = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x03\x00\x00\x00\x00")
+    enable_nm = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x03\x00\x00\x00\x00")
+    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x03\x00\x00\x00\x00")
+    self.assertTrue(self._tx(disable_nm))
+    self.assertTrue(self._tx(enable_nm))
+    self.assertFalse(self._tx(reject))
+
   def test_diag_session_allowed(self):
     ext = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x83\x00\x00\x00\x00\x00")
     dft = libsafety_py.make_CANPacket(0x730, 0, b"\x02\x10\x81\x00\x00\x00\x00\x00")
@@ -785,6 +802,14 @@ class TestHyundaiCanfdAngleLFANonLongRadarTesterPresent(unittest.TestCase):
     reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x01\x00\x00\x00\x00")
     self.assertTrue(self._tx(disable))
     self.assertTrue(self._tx(enable))
+    self.assertFalse(self._tx(reject))
+
+  def test_comm_control_nm_allowed(self):
+    disable_nm = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x83\x03\x00\x00\x00\x00")
+    enable_nm = libsafety_py.make_CANPacket(0x730, 0, b"\x03\x28\x00\x03\x00\x00\x00\x00")
+    reject = libsafety_py.make_CANPacket(0x730, 0, b"\x04\x28\x83\x03\x00\x00\x00\x00")
+    self.assertTrue(self._tx(disable_nm))
+    self.assertTrue(self._tx(enable_nm))
     self.assertFalse(self._tx(reject))
 
   def test_diag_session_allowed(self):
