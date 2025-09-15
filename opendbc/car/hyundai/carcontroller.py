@@ -183,6 +183,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       ramp_down_rate=self.params.ANGLE_RAMP_DOWN_TORQUE_REDUCTION_RATE
     )
 
+    # Track ADAS diagnostic session state for EV9 quiet-ADAS below 32 km/h
+    self._adas_diag_active: bool = False
+
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
@@ -279,6 +282,19 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # *** CAN/CAN FD specific ***
     if self.CP.flags & HyundaiFlags.CANFD:
+      # EV9 angle-steering: keep ADAS in diagnostic session at low speeds (<=32 km/h) with hysteresis
+      # This bypasses ADAS angle clamps to allow higher steering angles at parking/turning speeds.
+      if (self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and (self.CP.carFingerprint == CAR.KIA_EV9):
+        lower = (32 * CV.KPH_TO_MS)
+        upper = (34 * CV.KPH_TO_MS)
+        session = getattr(self, "_adas_diag_active", False)
+        if CS.out.vEgoRaw <= lower:
+          session = True
+        elif CS.out.vEgoRaw > upper:
+          session = False
+        self._adas_diag_active = session
+        if session and (self.frame % 100 == 0):
+          can_sends.append(make_tester_present_msg(0x730, self.CAN.ECAN, suppress_response=True))
       can_sends.extend(self.create_canfd_msgs(apply_steer_req, apply_torque, set_speed_in_units, accel,
                                               stopping, hud_control, CS, CC))
     else:
