@@ -1,6 +1,4 @@
 import math
-from collections import deque
-
 import numpy as np
 from opendbc.car.carlog import carlog
 from opendbc.car.vehicle_model import VehicleModel
@@ -15,8 +13,7 @@ except ImportError:
   PARAMS_AVAILABLE = False
 
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs, uds
-from opendbc.car.can_definitions import CanData
+from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance, apply_steer_angle_limits_vm
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
@@ -136,115 +133,6 @@ def parse_scaled_value(val, scale=10):
   return None
 
 
-class HyundaiAdasAngleBypass:
-  DISABLE_SPEED_KPH = 32.0
-  DISABLE_ANGLE_DEG = 119.9
-  COMMAND_INTERVAL_FRAMES = 5
-  HOLD_FRAMES_AFTER_DISABLE = 50
-
-  def __init__(self, CP, can_bus):
-    self.active = (CP.carFingerprint == CAR.KIA_EV9) and bool(CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING)
-    self.addr: int | None
-    self.bus: int | None
-    if not self.active:
-      self.addr = None
-      self.bus = None
-    else:
-      self.addr, self.bus = self._resolve_target(CP, can_bus)
-    self._pending: deque[bytes] = deque()
-    self._next_frame = 0
-    self._state = "idle"
-    self.disabled = False
-    self._hold_until = 0
-
-  def _resolve_target(self, CP, can_bus) -> tuple[int, int]:
-    if CP.flags & HyundaiFlags.CANFD:
-      bus = can_bus.ECAN
-      addr = 0x730 if (CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value) else 0x7d0
-    else:
-      bus = 0
-      addr = 0x7d0
-    return addr, bus
-
-  @staticmethod
-  def _single_frame(payload: bytes) -> bytes:
-    size = len(payload)
-    if size == 0 or size > 7:
-      raise ValueError('UDS payload must fit in a single frame')
-    data = bytearray(8)
-    data[0] = size
-    data[1:1 + size] = payload
-    return bytes(data)
-
-  def _build_disable_sequence(self) -> deque[bytes]:
-    frames = [
-      self._single_frame(bytes([uds.SERVICE_TYPE.DIAGNOSTIC_SESSION_CONTROL, uds.SESSION_TYPE.EXTENDED_DIAGNOSTIC])),
-      self._single_frame(bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
-                                0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX,
-                                uds.MESSAGE_TYPE.NORMAL])),
-    ]
-    return deque(frames + frames)
-
-  def _build_enable_sequence(self) -> deque[bytes]:
-    frames = [
-      self._single_frame(bytes([uds.SERVICE_TYPE.DIAGNOSTIC_SESSION_CONTROL, uds.SESSION_TYPE.EXTENDED_DIAGNOSTIC])),
-      self._single_frame(bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL,
-                                0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
-                                uds.MESSAGE_TYPE.NORMAL])),
-    ]
-    return deque(frames + frames)
-
-  def request(self, should_disable: bool, frame: int):
-    if not self.active or self.addr is None or self.bus is None:
-      return
-
-    if should_disable:
-      self._hold_until = frame + self.HOLD_FRAMES_AFTER_DISABLE
-      if self._state in ('disabling', 'disabled'):
-        return
-      carlog.info('EV9 ADAS bypass: disabling ADAS for >120° angle request')
-      self._pending = self._build_disable_sequence()
-      self._state = 'disabling'
-      self._next_frame = frame
-      return
-
-    if self.disabled and self._state != 'enabling' and frame >= self._hold_until:
-      carlog.info('EV9 ADAS bypass: re-enabling ADAS after high-angle request')
-      self._pending = self._build_enable_sequence()
-      self._state = 'enabling'
-      self._next_frame = frame
-
-  def step(self, frame: int, can_sends: list[CanData]):
-    if not self.active or self.addr is None or self.bus is None:
-      return
-    if self._pending and frame >= self._next_frame:
-      payload = self._pending.popleft()
-      can_sends.append(CanData(self.addr, payload, self.bus))
-      self._next_frame = frame + self.COMMAND_INTERVAL_FRAMES
-      if not self._pending:
-        if self._state == 'disabling':
-          self.disabled = True
-          self._state = 'disabled'
-          self._hold_until = max(self._hold_until, frame + self.HOLD_FRAMES_AFTER_DISABLE)
-        elif self._state == 'enabling':
-          self.disabled = False
-          self._state = 'idle'
-          self._hold_until = 0
-
-  @property
-  def requires_tester_present(self) -> bool:
-    return self.active and self.addr is not None and self.bus is not None and self._state in ('disabling', 'disabled', 'enabling')
-
-  @property
-  def should_use_lkas_alt(self) -> bool:
-    return self.active and self._state in ('disabling', 'disabled', 'enabling')
-
-  def tester_present_target(self) -> tuple[int, int] | None:
-    if not self.requires_tester_present or self.addr is None or self.bus is None:
-      return None
-    return self.addr, self.bus
-
-
 class CarController(CarControllerBase, EsccCarController, LeadDataCarController, LongitudinalController, MadsCarController):
   def __init__(self, dbc_names, CP, CP_SP):
     CarControllerBase.__init__(self, dbc_names, CP, CP_SP)
@@ -294,7 +182,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       ramp_up_rate=self.params.ANGLE_RAMP_UP_TORQUE_REDUCTION_RATE,
       ramp_down_rate=self.params.ANGLE_RAMP_DOWN_TORQUE_REDUCTION_RATE
     )
-    self.adas_angle_bypass = HyundaiAdasAngleBypass(CP, self.CAN)
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -368,13 +255,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     self.apply_torque_last = apply_torque
 
-    if self.adas_angle_bypass.active:
-      requested_angle = abs(actuators.steeringAngleDeg)
-      speed_kph = abs(CS.out.vEgo) * CV.MS_TO_KPH
-      should_disable_adas = CC.latActive and (requested_angle > HyundaiAdasAngleBypass.DISABLE_ANGLE_DEG) and \
-                            (speed_kph <= HyundaiAdasAngleBypass.DISABLE_SPEED_KPH)
-      self.adas_angle_bypass.request(should_disable_adas, self.frame)
-
     # accel + longitudinal
     accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
     stopping = actuators.longControlState == LongCtrlState.stopping
@@ -385,16 +265,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # *** common hyundai stuff ***
 
     # tester present - w/ no response (keeps relevant ECU disabled)
-    maintain_ecu_disable = self.CP.openpilotLongitudinalControl and not ((self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC) or self.ESCC.enabled)
-    maintain_angle_bypass = self.adas_angle_bypass.requires_tester_present
-    if self.frame % 100 == 0 and (maintain_ecu_disable or maintain_angle_bypass):
-      target = self.adas_angle_bypass.tester_present_target() if maintain_angle_bypass else None
-      if target is not None:
-        addr, bus = target
-      else:
-        addr, bus = 0x7d0, self.CAN.ECAN if self.CP.flags & HyundaiFlags.CANFD else 0
-        if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value:
-          addr, bus = 0x730, self.CAN.ECAN
+    if self.frame % 100 == 0 and not ((self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC) or self.ESCC.enabled) and \
+            self.CP.openpilotLongitudinalControl:
+      # for longitudinal control, either radar or ADAS driving ECU
+      addr, bus = 0x7d0, self.CAN.ECAN if self.CP.flags & HyundaiFlags.CANFD else 0
+      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value:
+        addr, bus = 0x730, self.CAN.ECAN
       can_sends.append(make_tester_present_msg(addr, bus, suppress_response=True))
 
       # for blinkers
@@ -404,13 +280,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # *** CAN/CAN FD specific ***
     if self.CP.flags & HyundaiFlags.CANFD:
       can_sends.extend(self.create_canfd_msgs(apply_steer_req, apply_torque, set_speed_in_units, accel,
-                                              stopping, hud_control, CS, CC,
-                                              force_lkas_alt=self.adas_angle_bypass.should_use_lkas_alt))
+                                              stopping, hud_control, CS, CC))
     else:
       can_sends.extend(self.create_can_msgs(apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel,
                                             stopping, hud_control, actuators, CS, CC))
-
-    self.adas_angle_bypass.step(self.frame, can_sends)
 
     new_actuators = actuators.as_builder()
     new_actuators.torque = apply_torque / self.params.STEER_MAX
@@ -469,16 +342,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return can_sends
 
-  def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC,
-                        force_lkas_alt=False):
+  def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
     can_sends = []
 
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
     # steering control
-    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque,
-                                                           self.apply_angle_last, self.lkas_icon, force_lkas_alt=force_lkas_alt))
+    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last
+                                                           , self.lkas_icon))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     if self.frame % 5 == 0 and lka_steering:
