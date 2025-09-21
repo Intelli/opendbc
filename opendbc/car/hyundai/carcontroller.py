@@ -41,9 +41,6 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 MAX_ANGLE_RATE = 5
 ANGLE_SAFETY_BASELINE_MODEL = "HYUNDAI_SANTA_FE_HEV_5TH_GEN"
 
-# Parallel parking mode is only enabled on the EV9 for very low-speed, large-angle maneuvers.
-PARKING_MODE_CANDIDATE = CAR.KIA_EV9
-
 
 def get_baseline_safety_cp():
   from opendbc.car.hyundai.interface import CarInterface
@@ -163,13 +160,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # For future parametrization / tuning
     self.angle_enable_smoothing_factor = True
 
-    # Parking mode state for EV9 low-speed sharp turns
-    self.ev9_parallel_parking_mode = False
-    self.ev9_parking_mode_start_frame = None
-    self.ev9_parking_mode_reenable_frame = 0
-    self._parking_mode_max_frames = max(1, math.ceil(CarControllerParams.PARKING_MODE_MAX_DURATION / DT_CTRL))
-    self._parking_mode_reenable_frames = max(0, math.ceil(CarControllerParams.PARKING_MODE_REENGAGE_DELAY / DT_CTRL))
-
     self._params = Params() if PARAMS_AVAILABLE else None
     if PARAMS_AVAILABLE:
       self.params.ANGLE_MIN_TORQUE_REDUCTION_GAIN = parse_tq_rdc_gain(
@@ -216,49 +206,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       v_ego_raw = CS.out.vEgoRaw
       desired_angle = np.clip(actuators.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX)
 
-      if self.CP.carFingerprint == PARKING_MODE_CANDIDATE:
-        requested_angle = abs(actuators.steeringAngleDeg)
-        speed = abs(v_ego_raw)
-
-        if self.ev9_parallel_parking_mode:
-          elapsed_frames = 0
-          if self.ev9_parking_mode_start_frame is not None:
-            elapsed_frames = self.frame - self.ev9_parking_mode_start_frame
-
-          timed_out = elapsed_frames >= self._parking_mode_max_frames
-          if (not CC.latActive or speed > CarControllerParams.PARKING_MODE_EXIT_SPEED_MAX or
-              speed < CarControllerParams.PARKING_MODE_EXIT_SPEED_MIN or
-              requested_angle < CarControllerParams.PARKING_MODE_EXIT_ANGLE_DEG or timed_out):
-            self.ev9_parallel_parking_mode = False
-            self.ev9_parking_mode_start_frame = None
-            if self._parking_mode_reenable_frames:
-              self.ev9_parking_mode_reenable_frame = self.frame + self._parking_mode_reenable_frames
-        else:
-          reenable_ready = self.frame >= self.ev9_parking_mode_reenable_frame
-          if (CC.latActive and reenable_ready and
-              CarControllerParams.PARKING_MODE_ENTRY_SPEED_MIN <= speed <= CarControllerParams.PARKING_MODE_ENTRY_SPEED_MAX and
-              requested_angle >= CarControllerParams.PARKING_MODE_ENTRY_ANGLE_DEG):
-            self.ev9_parallel_parking_mode = True
-            self.ev9_parking_mode_start_frame = self.frame
-      else:
-        if self.ev9_parallel_parking_mode:
-          self.ev9_parking_mode_start_frame = None
-        self.ev9_parallel_parking_mode = False
-
-      if self.ev9_parallel_parking_mode:
-        desired_angle = float(np.clip(desired_angle,
-                                      -CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG,
-                                      CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG))
-
       if self.angle_enable_smoothing_factor and abs(v_ego_raw) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
         desired_angle = sp_smooth_angle(v_ego_raw, desired_angle, self.apply_angle_last)
 
       apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
-
-      if self.ev9_parallel_parking_mode and apply_angle is not None:
-        apply_angle = float(np.clip(apply_angle,
-                                    -CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG,
-                                    CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG))
 
       # Historically we applied the baseline Santa Fe model on top to match Panda's hardcoded baseline.
       # Now, when Panda encodes a platform ID (e.g., EV9), it uses a platform-specific VM. In that case, skip the fallback.
@@ -291,10 +242,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         apply_torque = 0
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
-        self.ev9_parallel_parking_mode = False
-        self.ev9_parking_mode_start_frame = None
-        if self._parking_mode_reenable_frames:
-          self.ev9_parking_mode_reenable_frame = self.frame + self._parking_mode_reenable_frames
 
       # After we've used the last angle wherever we needed it, we now update it.
       self.apply_angle_last = apply_angle
@@ -333,7 +280,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # *** CAN/CAN FD specific ***
     if self.CP.flags & HyundaiFlags.CANFD:
       can_sends.extend(self.create_canfd_msgs(apply_steer_req, apply_torque, set_speed_in_units, accel,
-                                              stopping, hud_control, CS, CC, self.ev9_parallel_parking_mode))
+                                              stopping, hud_control, CS, CC))
     else:
       can_sends.extend(self.create_can_msgs(apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel,
                                             stopping, hud_control, actuators, CS, CC))
@@ -395,16 +342,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return can_sends
 
-  def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC, parking_mode_active):
+  def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
     can_sends = []
 
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
     # steering control
-    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req,
-                                                           apply_torque, self.apply_angle_last, self.lkas_icon,
-                                                           parking_mode_active))
+    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last
+                                                           , self.lkas_icon))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     if self.frame % 5 == 0 and lka_steering:
