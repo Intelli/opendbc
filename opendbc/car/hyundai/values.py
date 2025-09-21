@@ -66,6 +66,17 @@ class CarControllerParams:
   SMOOTHING_ANGLE_ALPHA_MATRIX = [0.05, 0.1, 0.3, 0.6, 1]
   SMOOTHING_ANGLE_MAX_VEGO = SMOOTHING_ANGLE_VEGO_MATRIX[-1]
 
+  # EV9 parallel parking mode thresholds (m/s, seconds, and degrees)
+  PARKING_MODE_ENTRY_SPEED_MIN = 1.0 * CV.KPH_TO_MS  # avoids commanding parking mode from a stop
+  PARKING_MODE_ENTRY_SPEED_MAX = 7.0 * CV.KPH_TO_MS  # ~7 km/h entry ceiling
+  PARKING_MODE_EXIT_SPEED_MIN = 0.5 * CV.KPH_TO_MS   # drop out if we slow back toward a stop
+  PARKING_MODE_EXIT_SPEED_MAX = 10.0 * CV.KPH_TO_MS  # ~10 km/h upper bound for hysteresis
+  PARKING_MODE_ENTRY_ANGLE_DEG = 120.0
+  PARKING_MODE_EXIT_ANGLE_DEG = 105.0
+  PARKING_MODE_MAX_ANGLE_DEG = 176.7
+  PARKING_MODE_MAX_DURATION = 0.8  # seconds of parking assist before releasing back to standard control
+  PARKING_MODE_REENGAGE_DELAY = 0.5  # seconds to wait before we may re-enable parking assist
+
   def __init__(self, CP):
     self.STEER_DELTA_UP = 3
     self.STEER_DELTA_DOWN = 7
