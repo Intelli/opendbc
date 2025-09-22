@@ -1,7 +1,3 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-
 import numpy as np
 from opendbc.car import CanBusBase
 from opendbc.car.crc import CRC16_XMODEM
@@ -38,28 +34,6 @@ class CanBus(CanBusBase):
   @property
   def CAM(self):
     return self._cam
-
-
-@dataclass
-class AprkCommand:
-  enabled: bool = False
-  command_state: int = 0x02
-  command_phase: int = 0
-  slot_side: int = 0
-  path_step: int = 0
-  steer_angle_deg: float = 0.0
-  left_limit_deg: float = 0.0
-  right_limit_deg: float = 0.0
-  selected_gear: int = 0
-  path_distance_m: float = 0.0
-  status_word: int = 0
-  brake_hold_active: bool = False
-  target_speed_mps: float = 0.0
-  curvature0: int = 0
-  curvature1: int = 0
-  curvature2: int = 0
-  curvature3: int = 0
-  enable_mask: int = 0
 
 
 def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon):
@@ -195,62 +169,22 @@ def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_ov
   return packer.make_can_msg("SCC_CONTROL", CAN.ECAN, values)
 
 
-def create_spas_messages(packer, CAN, left_blink, right_blink, aprk_cmd: AprkCommand | None = None):
-  if aprk_cmd is None:
-    aprk_cmd = AprkCommand()
+def create_spas_messages(packer, CAN, left_blink, right_blink):
+  ret = []
 
-  command_state = int(np.clip(aprk_cmd.command_state, 0, 0xFF))
-  path_step = int(np.clip(aprk_cmd.path_step, 0, 0xFF))
-  steer_angle = float(np.clip(aprk_cmd.steer_angle_deg, -3276.7, 3276.7))
-  left_limit = float(np.clip(aprk_cmd.left_limit_deg, 0.0, 6553.5))
-  right_limit = float(np.clip(aprk_cmd.right_limit_deg, 0.0, 6553.5))
-  selected_gear = int(np.clip(aprk_cmd.selected_gear, 0, 0xFF))
-
-  values_spas1 = {
-    "APRK_CommandState": command_state,
-    "APRK_PathStep": path_step,
-    "APRK_SteerAngleCmd": steer_angle,
-    "APRK_SteerAngleLeftLimit": left_limit,
-    "APRK_SteerAngleRightLimit": right_limit,
-    "APRK_SelectedGear": selected_gear,
+  values = {
   }
-
-  ret = [packer.make_can_msg("SPAS1", CAN.ECAN, values_spas1)]
+  ret.append(packer.make_can_msg("SPAS1", CAN.ECAN, values))
 
   blink = 0
   if left_blink:
     blink = 3
   elif right_blink:
     blink = 4
-
-  slot_side = int(np.clip(aprk_cmd.slot_side, 0, 0xFF))
-  command_phase = int(np.clip(aprk_cmd.command_phase, 0, 0xFF))
-  path_distance = float(np.clip(aprk_cmd.path_distance_m, 0.0, 2.55))
-  status_word = int(np.clip(aprk_cmd.status_word, 0, 0xFFFF))
-  brake_hold = 1 if aprk_cmd.brake_hold_active else 0
-  target_speed = float(np.clip(aprk_cmd.target_speed_mps, 0.0, 2.55))
-  curvature0 = int(np.clip(aprk_cmd.curvature0, 0, 0xFF))
-  curvature1 = int(np.clip(aprk_cmd.curvature1, 0, 0xFF))
-  curvature2 = int(np.clip(aprk_cmd.curvature2, 0, 0xFF))
-  curvature3 = int(np.clip(aprk_cmd.curvature3, 0, 0xFF))
-  enable_mask = int(np.clip(aprk_cmd.enable_mask, 0, 0xFF))
-
-  values_spas2 = {
+  values = {
     "BLINKER_CONTROL": blink,
-    "APRK_SlotSide": slot_side,
-    "APRK_CommandPhase": command_phase,
-    "APRK_PathDistance": path_distance,
-    "APRK_StatusWord": status_word,
-    "APRK_BrakeHoldActive": brake_hold,
-    "APRK_TargetSpeed": target_speed,
-    "APRK_PathCurvature0": curvature0,
-    "APRK_PathCurvature1": curvature1,
-    "APRK_PathCurvature2": curvature2,
-    "APRK_PathCurvature3": curvature3,
-    "APRK_EnableMask": enable_mask,
   }
-
-  ret.append(packer.make_can_msg("SPAS2", CAN.ECAN, values_spas2))
+  ret.append(packer.make_can_msg("SPAS2", CAN.ECAN, values))
 
   return ret
 

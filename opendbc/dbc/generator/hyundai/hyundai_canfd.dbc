@@ -317,29 +317,14 @@ BO_ 354 CCNC_0x162: 32 CCNC
 
 BO_ 357 SPAS1: 24 APRK
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_CommandState : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_PathStep : 88|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_SteerAngleCmd : 96|16@1- (0.1,0) [-3276.7|3276.7] "deg" XXX
- SG_ APRK_SteerAngleLeftLimit : 112|16@1+ (0.1,0) [0|6553.5] "deg" XXX
- SG_ APRK_SteerAngleRightLimit : 128|16@1+ (0.1,0) [0|6553.5] "deg" XXX
- SG_ APRK_SelectedGear : 152|8@1+ (1,0) [0|255] "" XXX
+ SG_ COUNTER : 16|8@1+ (1,0) [0|0] "" XXX
+ SG_ NEW_SIGNAL_2 : 90|3@1+ (1,0) [0|0] "" XXX
+ SG_ NEW_SIGNAL_1 : 96|16@1- (0.1,0) [0|0] "" XXX
 
 BO_ 362 SPAS2: 32 APRK
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
- SG_ COUNTER : 16|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_SlotSide : 24|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_CommandPhase : 32|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_PathDistance : 56|8@1+ (0.01,0) [0|2.55] "m" XXX
- SG_ APRK_StatusWord : 112|16@1+ (1,0) [0|65535] "" XXX
- SG_ APRK_BrakeHoldActive : 128|1@1+ (1,0) [0|1] "" XXX
- SG_ BLINKER_CONTROL : 133|3@1+ (1,0) [0|7] "" XXX
- SG_ APRK_TargetSpeed : 152|8@1+ (0.01,0) [0|2.55] "m/s" XXX
- SG_ APRK_PathCurvature0 : 160|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_PathCurvature1 : 168|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_PathCurvature2 : 176|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_PathCurvature3 : 184|8@1+ (1,0) [0|255] "" XXX
- SG_ APRK_EnableMask : 248|8@1+ (1,0) [0|255] "" XXX
+ SG_ COUNTER : 16|8@1+ (1,0) [0|0] "" XXX
+ SG_ BLINKER_CONTROL : 133|3@1+ (1,0) [0|0] "" XXX
 
 BO_ 373 TCS: 24 XXX
  SG_ CHECKSUM : 0|16@1+ (1,0) [0|65535] "" XXX
