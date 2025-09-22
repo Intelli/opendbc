@@ -36,7 +36,7 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon, parking_mode_active):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon):
   values = {
     "LKA_OptUsmSta": 2,
     "LKA_SysIndReq": 2 if enabled else 1,
@@ -51,7 +51,6 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
   # Angle control doesn't support using LFA yet
   if CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
     # LKAS messages take priority over LFA messages on HDA2.
-    parking_state = 2 if parking_mode_active else 1
     values |= {
       "LKA_OptUsmSta": 0,  # TODO: not used by the stock system
       "StrTqReqVal": 0,  # we don't use torque
@@ -60,8 +59,6 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       "ADAS_StrAnglReqVal": apply_angle,
       "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
       "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,
-      "ADAS_ActvACISta": parking_state,
-      "ADAS_ActvACILvl2Sta": parking_state,
     }
 
   ret = []
@@ -72,8 +69,6 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
     ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, values))
   else:
     ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
-    if parking_mode_active and CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-      ret.append(packer.make_can_msg("LKAS_ALT", CAN.ECAN, values))
 
   return ret
 
