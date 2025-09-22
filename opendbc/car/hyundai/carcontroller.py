@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 import numpy as np
 from opendbc.car.carlog import carlog
@@ -17,7 +19,7 @@ from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance, apply_steer_angle_limits_vm
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
-from opendbc.car.hyundai.hyundaicanfd import CanBus
+from opendbc.car.hyundai.hyundaicanfd import CanBus, AprkCommand
 from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, \
   HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT, HYUNDAI_CANFD_PARAM_PLATFORM_ID_MASK
 from opendbc.car.interfaces import CarControllerBase
@@ -160,6 +162,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # For future parametrization / tuning
     self.angle_enable_smoothing_factor = True
 
+    self.ev9_parallel_parking_mode = False
+    self.ev9_parking_mode_start_frame: int | None = None
+    self.ev9_parking_mode_reenable_frame = 0
+
     self._params = Params() if PARAMS_AVAILABLE else None
     if PARAMS_AVAILABLE:
       self.params.ANGLE_MIN_TORQUE_REDUCTION_GAIN = parse_tq_rdc_gain(
@@ -183,6 +189,117 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       ramp_down_rate=self.params.ANGLE_RAMP_DOWN_TORQUE_REDUCTION_RATE
     )
 
+  def _disable_ev9_parking_mode(self) -> None:
+    self.ev9_parallel_parking_mode = False
+    self.ev9_parking_mode_start_frame = None
+    reenable_frames = int(CarControllerParams.PARKING_MODE_REENGAGE_DELAY / DT_CTRL)
+    self.ev9_parking_mode_reenable_frame = self.frame + reenable_frames
+
+  def _update_ev9_parking_mode(self, op_enabled: bool, speed: float, requested_angle: float, gear_code: int) -> bool:
+    if self.CP.carFingerprint != CAR.KIA_EV9:
+      if self.ev9_parallel_parking_mode:
+        self._disable_ev9_parking_mode()
+      return False
+
+    if not op_enabled:
+      if self.ev9_parallel_parking_mode:
+        self._disable_ev9_parking_mode()
+      return False
+
+    if gear_code == 0:
+      if self.ev9_parallel_parking_mode:
+        self._disable_ev9_parking_mode()
+      return False
+
+    if self.ev9_parallel_parking_mode:
+      if self.ev9_parking_mode_start_frame is None:
+        self.ev9_parking_mode_start_frame = self.frame
+      elapsed = (self.frame - self.ev9_parking_mode_start_frame) * DT_CTRL
+      timed_out = elapsed >= CarControllerParams.PARKING_MODE_MAX_DURATION
+      below_active_speed = speed < CarControllerParams.PARKING_MODE_MIN_ACTIVE_SPEED
+      should_exit = (
+        speed > CarControllerParams.PARKING_MODE_EXIT_SPEED_MAX or
+        requested_angle < CarControllerParams.PARKING_MODE_EXIT_ANGLE_DEG or
+        requested_angle > CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG or
+        gear_code == 0 or
+        below_active_speed or
+        timed_out
+      )
+      if should_exit:
+        self._disable_ev9_parking_mode()
+        return False
+      return True
+
+    reenable_ready = self.frame >= self.ev9_parking_mode_reenable_frame
+    if (
+      reenable_ready and
+      CarControllerParams.PARKING_MODE_ENTRY_SPEED_MIN <= speed <= CarControllerParams.PARKING_MODE_ENTRY_SPEED_MAX and
+      CarControllerParams.PARKING_MODE_ENTRY_ANGLE_DEG <= requested_angle <= CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG and
+      gear_code != 0
+    ):
+      self.ev9_parallel_parking_mode = True
+      self.ev9_parking_mode_start_frame = self.frame
+      return True
+
+    return False
+
+  def _build_aprk_command(self, apply_angle: float | None, CC, speed_abs: float, parking_mode_active: bool, gear_code: int) -> AprkCommand:
+    slot_side = CarControllerParams.APRK_SLOT_SIDE_RIGHT if CC.rightBlinker else (
+      CarControllerParams.APRK_SLOT_SIDE_LEFT if CC.leftBlinker else CarControllerParams.APRK_SLOT_SIDE_UNSPECIFIED)
+
+    command = AprkCommand(
+      command_state=CarControllerParams.APRK_COMMAND_STATE_STANDBY,
+      command_phase=CarControllerParams.APRK_COMMAND_PHASE_STANDBY,
+      slot_side=slot_side,
+      selected_gear=gear_code,
+    )
+    command.status_word = CarControllerParams.APRK_STATUS_WORD_STANDBY
+
+    if not parking_mode_active or gear_code == 0 or apply_angle is None:
+      return command
+
+    if speed_abs < CarControllerParams.PARKING_MODE_MIN_ACTIVE_SPEED:
+      return command
+
+    limited_angle = float(np.clip(apply_angle,
+                                  -CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG,
+                                  CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG))
+    angle_limit = max(abs(limited_angle), CarControllerParams.PARKING_MODE_ENTRY_ANGLE_DEG)
+    command.enabled = True
+    command.command_state = CarControllerParams.APRK_COMMAND_STATE_ACTIVE
+    command.command_phase = CarControllerParams.APRK_COMMAND_PHASE_ACTIVE
+    command.steer_angle_deg = limited_angle
+    command.left_limit_deg = angle_limit
+    command.right_limit_deg = angle_limit
+    command.path_step = CarControllerParams.APRK_PATH_STEP
+    command.path_distance_m = float(np.clip(speed_abs * CarControllerParams.PARKING_MODE_PATH_LOOKAHEAD_S,
+                                            0.0,
+                                            CarControllerParams.APRK_PATH_DISTANCE_MAX))
+    command.status_word = CarControllerParams.APRK_STATUS_WORD_ACTIVE
+    command.brake_hold_active = speed_abs < CarControllerParams.PARKING_MODE_BRAKE_HOLD_SPEED
+    command.target_speed_mps = float(np.clip(speed_abs,
+                                             0.0,
+                                             CarControllerParams.PARKING_MODE_TARGET_SPEED_MAX))
+    command.enable_mask = CarControllerParams.APRK_ENABLE_MASK
+
+    curvature = abs(self.VM.calc_curvature(np.deg2rad(limited_angle), max(speed_abs, 0.1), 0.0))
+    curvature_idx = int(np.clip(curvature * CarControllerParams.APRK_CURVATURE_SCALE, 0.0, 0xFF))
+    command.curvature0 = curvature_idx
+    command.curvature1 = curvature_idx
+    command.curvature2 = curvature_idx
+    command.curvature3 = curvature_idx
+
+    return command
+
+  @staticmethod
+  def _gear_to_aprk_code(gear) -> int:
+    gear_shifter = structs.CarState.GearShifter
+    if gear == gear_shifter.reverse:
+      return 1
+    if gear == gear_shifter.drive:
+      return 2
+    return 0
+
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
@@ -192,6 +309,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     actuators = CC.actuators
     hud_control = CC.hudControl
+
+    aprk_cmd = AprkCommand()
 
     # steering torque
     if not self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
@@ -204,12 +323,32 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # angle control
     else:
       v_ego_raw = CS.out.vEgoRaw
+      speed_abs = abs(v_ego_raw)
+      gear_code = self._gear_to_aprk_code(CS.out.gearShifter)
       desired_angle = np.clip(actuators.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX)
+      requested_angle = abs(desired_angle)
+      parking_mode_active = self._update_ev9_parking_mode(CC.enabled, speed_abs, requested_angle, gear_code)
+
+      # give control back to the driver immediately when they intervene
+      if CS.out.steeringPressed:
+        if self.ev9_parallel_parking_mode:
+          self._disable_ev9_parking_mode()
+        parking_mode_active = False
+
+      if parking_mode_active:
+        desired_angle = float(np.clip(desired_angle,
+                                      -CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG,
+                                      CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG))
 
       if self.angle_enable_smoothing_factor and abs(v_ego_raw) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
         desired_angle = sp_smooth_angle(v_ego_raw, desired_angle, self.apply_angle_last)
 
       apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
+
+      if parking_mode_active and apply_angle is not None:
+        apply_angle = float(np.clip(apply_angle,
+                                    -CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG,
+                                    CarControllerParams.PARKING_MODE_MAX_ANGLE_DEG))
 
       # Historically we applied the baseline Santa Fe model on top to match Panda's hardcoded baseline.
       # Now, when Panda encodes a platform ID (e.g., EV9), it uses a platform-specific VM. In that case, skip the fallback.
@@ -242,9 +381,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         apply_torque = 0
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
+        if self.ev9_parallel_parking_mode:
+          self._disable_ev9_parking_mode()
+          parking_mode_active = False
 
       # After we've used the last angle wherever we needed it, we now update it.
       self.apply_angle_last = apply_angle
+
+      aprk_cmd = self._build_aprk_command(self.apply_angle_last, CC, speed_abs, parking_mode_active, gear_code)
 
     if not CC.latActive:
       apply_torque = 0
@@ -280,7 +424,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # *** CAN/CAN FD specific ***
     if self.CP.flags & HyundaiFlags.CANFD:
       can_sends.extend(self.create_canfd_msgs(apply_steer_req, apply_torque, set_speed_in_units, accel,
-                                              stopping, hud_control, CS, CC))
+                                              stopping, hud_control, CS, CC, aprk_cmd))
     else:
       can_sends.extend(self.create_can_msgs(apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel,
                                             stopping, hud_control, actuators, CS, CC))
@@ -342,7 +486,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return can_sends
 
-  def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
+  def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC, aprk_cmd: AprkCommand):
     can_sends = []
 
     lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
@@ -361,9 +505,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
       can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, self.lfa_icon))
 
-    # blinkers
-    if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
-      can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker))
+    # SPAS / APRK messages
+    should_send_spas = aprk_cmd.enabled or (lka_steering and bool(self.CP.flags & HyundaiFlags.ENABLE_BLINKERS))
+    if should_send_spas:
+      can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker, aprk_cmd))
 
     if self.CP.openpilotLongitudinalControl:
       if lka_steering:
