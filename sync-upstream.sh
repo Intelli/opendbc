@@ -27,6 +27,28 @@ git restore --source="${TARGET_REF}" --staged --worktree --no-overlay -- \
   ':(top,exclude).gitmodules' \
   ':(top,exclude)patches' \
   ':(top,exclude)opendbc_repo'
+
+# Align submodules to upstream commit while keeping opendbc_repo managed separately.
+submodules=()
+while IFS= read -r submodule_path; do
+  [[ -z "${submodule_path}" ]] && continue
+  submodules+=("${submodule_path}")
+done < <(python3 - <<'PY_SUBMODULES'
+import configparser
+
+cfg = configparser.RawConfigParser()
+cfg.read('.gitmodules')
+for section in cfg.sections():
+    path = cfg.get(section, 'path', fallback='').strip()
+    if path and path != 'opendbc_repo':
+        print(path)
+PY_SUBMODULES
+)
+
+if [[ ${#submodules[@]} -gt 0 ]]; then
+  git submodule sync --recursive -- "${submodules[@]}"
+  git submodule update --init --recursive --checkout -- "${submodules[@]}"
+fi
 #git restore --source="${TARGET_REF}" --staged --worktree --no-overlay .
 #git clean -fd
 #git commit -m "Sync upstream"
