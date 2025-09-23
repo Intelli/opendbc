@@ -63,30 +63,56 @@ apply_patch_file() {
   fi
 
   local check_output
+  local check_status=0
+  set +e
   check_output=$(git apply --check "$patch_path" 2>&1)
-  local check_status=$?
-
-  if [[ $check_status -eq 0 ]]; then
-    local apply_output
-    apply_output=$(git apply "$patch_path" 2>&1)
-    local apply_status=$?
-
-    if [[ $apply_status -eq 0 ]]; then
-      [[ -n "$apply_output" ]] && printf '%s\n' "$apply_output"
-      return 0
+  check_status=$?
+  set -e
+  if [[ $check_status -ne 0 ]]; then
+    echo "Standard apply failed; retrying with --3way" >&2
+    local git_dir
+    git_dir=$(git rev-parse --git-dir)
+    local temp_index
+    temp_index=$(mktemp "${TMPDIR:-/tmp}/apply_patch_index.XXXXXX")
+    if [[ -f "$git_dir/index" ]]; then
+      cp "$git_dir/index" "$temp_index"
+    else
+      : > "$temp_index"
     fi
 
-    printf '%s\n' "$apply_output" >&2
-    return $apply_status
-  fi
+    local three_way_output
+    local three_way_status=0
+    set +e
+    three_way_output=$(GIT_INDEX_FILE="$temp_index" git apply --3way "$patch_path" 2>&1)
+    three_way_status=$?
+    set -e
+    rm -f "$temp_index"
 
-  if git apply --reverse --check "$patch_path" >/dev/null 2>&1; then
-    echo "Patch already applied; skipping $patch_path"
+    if [[ $three_way_status -ne 0 ]]; then
+      echo "Failed to apply $patch_path" >&2
+      [[ -n "$check_output" ]] && printf '%s\n' "$check_output" >&2
+      [[ -n "$three_way_output" ]] && printf '%s\n' "$three_way_output" >&2
+      return $three_way_status
+    fi
+
+    [[ -n "$three_way_output" ]] && printf '%s\n' "$three_way_output"
     return 0
   fi
 
-  printf '%s\n' "$check_output" >&2
-  return $check_status
+  local apply_output
+  local apply_status=0
+  set +e
+  apply_output=$(git apply "$patch_path" 2>&1)
+  apply_status=$?
+  set -e
+  if [[ $apply_status -ne 0 ]]; then
+    echo "Failed to apply $patch_path" >&2
+    [[ -n "$apply_output" ]] && printf '%s\n' "$apply_output" >&2
+    return $apply_status
+  fi
+
+  [[ -n "$apply_output" ]] && printf '%s\n' "$apply_output"
+  return 0
 }
 
 cd "$REPO_ROOT"
