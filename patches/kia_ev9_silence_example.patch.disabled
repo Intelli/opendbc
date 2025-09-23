@@ -1,0 +1,171 @@
+diff --git a/opendbc/car/hyundai/carcontroller.py b/opendbc/car/hyundai/carcontroller.py
+index d3dfff01..34893c13 100644
+--- a/opendbc/car/hyundai/carcontroller.py
++++ b/opendbc/car/hyundai/carcontroller.py
+@@ -41,6 +41,13 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
+ MAX_ANGLE_RATE = 5
+ ANGLE_SAFETY_BASELINE_MODEL = "HYUNDAI_SANTA_FE_HEV_5TH_GEN"
+ 
++# Experimental low-speed ADAS silence window configuration (frames @ ~100Hz control loop)
++ADAS_SILENCE_TRIGGER_DEG = 120.0
++ADAS_SILENCE_MAX_DEG = 180.0
++ADAS_SILENCE_TRIGGER_SPEED_MPS = 30.0 * CV.KPH_TO_MS
++ADAS_SILENCE_DURATION_FRAMES = max(1, int(round(0.8 / DT_CTRL)))  # < 1s as requested
++ADAS_SILENCE_COOLDOWN_FRAMES = max(1, int(round(1.5 / DT_CTRL)))
++
+ 
+ def get_baseline_safety_cp():
+   from opendbc.car.hyundai.interface import CarInterface
+@@ -160,6 +167,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+     # For future parametrization / tuning
+     self.angle_enable_smoothing_factor = True
+ 
++    # ADAS silence window bookkeeping
++    self.adas_silence_frames = 0
++    self.adas_silence_cooldown_frames = 0
++    self.adas_silence_active = False
++    self._adas_silence_angle = 0.0
++
+     self._params = Params() if PARAMS_AVAILABLE else None
+     if PARAMS_AVAILABLE:
+       self.params.ANGLE_MIN_TORQUE_REDUCTION_GAIN = parse_tq_rdc_gain(
+@@ -183,6 +196,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+       ramp_down_rate=self.params.ANGLE_RAMP_DOWN_TORQUE_REDUCTION_RATE
+     )
+ 
++  def _start_adas_silence(self, requested_angle: float) -> None:
++    """Begin a short ADAS silence window so the driver can nudge the wheel past the soft limit."""
++    self.adas_silence_frames = max(self.adas_silence_frames, ADAS_SILENCE_DURATION_FRAMES)
++    self.adas_silence_cooldown_frames = max(self.adas_silence_cooldown_frames, ADAS_SILENCE_COOLDOWN_FRAMES)
++    self.adas_silence_active = True
++    self._adas_silence_angle = requested_angle
++    carlog.info("ADAS silence window engaged at %.1f deg", requested_angle)
++
+   def update(self, CC, CC_SP, CS, now_nanos):
+     EsccCarController.update(self, CS)
+     LeadDataCarController.update(self, CC_SP)
+@@ -190,6 +211,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+     if self.frame % 2 == 0:
+       LongitudinalController.update(self, CC, CS)
+ 
++    if self.adas_silence_cooldown_frames > 0:
++      self.adas_silence_cooldown_frames -= 1
++    # Treat the current frame as part of an active silence window if frames remain
++    self.adas_silence_active = self.adas_silence_frames > 0
++    if self.adas_silence_active:
++      self.adas_silence_frames -= 1
++
+     actuators = CC.actuators
+     hud_control = CC.hudControl
+ 
+@@ -211,6 +239,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+ 
+       apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
+ 
++      if (self.CP.carFingerprint == CAR.KIA_EV9 and
++          self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING and
++          CC.latActive and
++          not self.adas_silence_active and
++          self.adas_silence_cooldown_frames == 0 and
++          abs(v_ego_raw) < ADAS_SILENCE_TRIGGER_SPEED_MPS and
++          apply_angle is not None and
++          ADAS_SILENCE_TRIGGER_DEG <= abs(apply_angle) <= ADAS_SILENCE_MAX_DEG):
++        self._start_adas_silence(apply_angle)
++
+       # Historically we applied the baseline Santa Fe model on top to match Panda's hardcoded baseline.
+       # Now, when Panda encodes a platform ID (e.g., EV9), it uses a platform-specific VM. In that case, skip the fallback.
+       panda_platform_id = 0
+@@ -247,8 +285,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+       self.apply_angle_last = apply_angle
+ 
+     if not CC.latActive:
++      self.adas_silence_frames = 0
++      self.adas_silence_active = False
++      self._adas_silence_angle = 0.0
+       apply_torque = 0
+ 
++    if self.adas_silence_active:
++      apply_torque = 0
++      apply_steer_req = False
++
+     # Hold torque with induced temporary fault when cutting the actuation bit
+     # FIXME: we don't use this with CAN FD?
+     torque_fault = CC.latActive and not apply_steer_req
+@@ -291,6 +336,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+     new_actuators.steeringAngleDeg = self.apply_angle_last
+     new_actuators.accel = self.tuning.actual_accel
+ 
++    if not self.adas_silence_active and self.adas_silence_frames == 0 and self._adas_silence_angle != 0.0:
++      self._adas_silence_angle = 0.0
++
+     self.frame += 1
+     return new_actuators, can_sends
+ 
+@@ -349,11 +397,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
+ 
+     # steering control
+-    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last
+-                                                           , self.lkas_icon))
++    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque,
++                                                           self.apply_angle_last, self.lkas_icon, self.adas_silence_active))
+ 
+     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
+-    if self.frame % 5 == 0 and lka_steering:
++    if lka_steering and (self.adas_silence_active or self.frame % 5 == 0):
+       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
+                                                         self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT))
+ 
+@@ -397,4 +445,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+               can_sends.append(hyundaicanfd.create_buttons(self.packer, self.CP, self.CAN, CS.buttons_counter + 1, Buttons.RES_ACCEL))
+             self.last_button_frame = self.frame
+ 
++    if self.adas_silence_active and lka_steering and not self.CP.openpilotLongitudinalControl:
++      can_sends.extend(hyundaicanfd.create_adrv_messages(self.packer, self.CAN, self.frame))
++
+     return can_sends
+diff --git a/opendbc/car/hyundai/hyundaicanfd.py b/opendbc/car/hyundai/hyundaicanfd.py
+index 9aa62277..771dbd8e 100644
+--- a/opendbc/car/hyundai/hyundaicanfd.py
++++ b/opendbc/car/hyundai/hyundaicanfd.py
+@@ -36,13 +36,14 @@ class CanBus(CanBusBase):
+     return self._cam
+ 
+ 
+-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon):
++def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon, adas_silence=False):
++  lat_active_effective = lat_active and not adas_silence
+   values = {
+     "LKA_OptUsmSta": 2,
+-    "LKA_SysIndReq": 2 if enabled else 1,
+-    "StrTqReqVal": apply_torque,
++    "LKA_SysIndReq": 2 if enabled and not adas_silence else (0 if adas_silence else 1),
++    "StrTqReqVal": apply_torque if not adas_silence else 0,
+     "LKA_SysWrn": 0,
+-    "ActToiSta": 1 if lat_active else 0,
++    "ActToiSta": 1 if lat_active_effective else 0,
+     "Damping_Gain": 100,  # can potentially tuned for better perf [3, 200]
+     "LKA_UsmMod": 0,  # hide LKAS settings
+     "LKA_RcgSta": 0,  # lane recognition status (0 for "not recognized")
+@@ -55,12 +56,18 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
+       "LKA_OptUsmSta": 0,  # TODO: not used by the stock system
+       "StrTqReqVal": 0,  # we don't use torque
+       "ActToiSta": 0,  # we don't use torque
+-      "LKA_RcgSta": 3 if lat_active else 0,
++      "LKA_RcgSta": 3 if lat_active_effective else 0,
+       "ADAS_StrAnglReqVal": apply_angle,
+-      "LKAS_ANGLE_ACTIVE": 2 if lat_active else 1,
+-      "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,
++      "LKAS_ANGLE_ACTIVE": 2 if lat_active_effective else 1,
++      "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active_effective else 0,
+     }
+ 
++    if adas_silence:
++      values["LKAS_ANGLE_ACTIVE"] = 0
++      values["ADAS_ACIAnglTqRedcGainVal"] = 0
++      values["LKA_OptUsmSta"] = 0
++      values["LKA_RcgSta"] = 0
++
+   ret = []
+   if CP.flags & HyundaiFlags.CANFD_LKA_STEERING:
+     lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT else "LKAS"
