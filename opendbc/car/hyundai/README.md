@@ -48,13 +48,3 @@ Due to its physics characteristics, the Santa Fe requires smaller steering angle
 Due to different physical characteristics, the Ioniq 5 PE can handle larger steering angles while still remaining within the same ISO safety standards.
 
 By using the Santa Fe's conservative limits across all vehicles, we ensure the Ioniq 5 PE operates well within its capabilities, while preventing the Santa Fe from exceeding its safety thresholds.
-
-## Kia EV9 Angle-Steering Integration
-
-This angle-steering development branch extends the Hyundai/Kia/Genesis stack to explicitly support the Kia EV9 platform:
-
-- **Platform identification:** The Hyundai values module now encodes a three-bit CAN-FD platform identifier and exposes the `HyundaiCanfdPlatform` enum so that the EV9 can be tagged at the CarParams layer and in safety tests.【F:opendbc/car/hyundai/values.py†L126-L134】【F:opendbc/safety/tests/test_hyundai_canfd.py†L8-L15】 The Hyundai interface applies this identifier to EV9 angle-steering configurations so Panda can select the correct vehicle model.【F:opendbc/car/hyundai/interface.py†L161-L164】
-- **Panda safety vehicle model:** The CAN-FD safety hooks cache the platform identifier, define EV9-specific vehicle-model parameters, and choose them when validating steering angle commands; initialization decodes the ID directly from `safetyParam`.【F:opendbc/safety/modes/hyundai_canfd.h†L48-L52】【F:opendbc/safety/modes/hyundai_canfd.h†L195-L227】【F:opendbc/safety/modes/hyundai_canfd.h†L343-L351】
-- **Controller alignment:** The Hyundai angle controller now inspects the Panda platform ID and skips the legacy baseline fallback when Panda has already switched to an EV9 vehicle model, keeping both sides aligned on the same physics assumptions.【F:opendbc/car/hyundai/carcontroller.py†L214-L225】
-- **Safety coverage:** Dedicated EV9 safety tests exercise the Panda EV9 vehicle model to verify the lateral acceleration and jerk checks with the EV9 limits.【F:opendbc/safety/tests/test_hyundai_canfd.py†L514-L579】
-- **Supporting data:** The EV9 platform definition advertises CAN-FD angle-steering support, torque overrides align with other HKG angle platforms, and the replay guide includes EV9 environment variables for debugging this branch.【F:opendbc/car/hyundai/values.py†L622-L627】【F:opendbc/car/torque_data/override.toml†L100-L105】【F:opendbc/car/hyundai/tests/replay_route.md†L11-L16】
