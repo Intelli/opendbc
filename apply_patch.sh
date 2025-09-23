@@ -53,29 +53,35 @@ resolve_patch_path() {
   return 1
 }
 
-apply_inverse_patch() {
+apply_patch_file() {
   local patch_path="$1"
-  echo "Applying inverse of $patch_path"
+  echo "Applying $patch_path"
 
-  local reverse_check_output
-  if reverse_check_output=$(git apply --reverse --check "$patch_path" 2>&1); then
+  local check_output
+  check_output=$(git apply --check "$patch_path" 2>&1)
+  local check_status=$?
+
+  if [[ $check_status -eq 0 ]]; then
     local apply_output
-    if apply_output=$(git apply --reverse "$patch_path" 2>&1); then
+    apply_output=$(git apply "$patch_path" 2>&1)
+    local apply_status=$?
+
+    if [[ $apply_status -eq 0 ]]; then
       [[ -n "$apply_output" ]] && printf '%s\n' "$apply_output"
       return 0
     fi
+
     printf '%s\n' "$apply_output" >&2
-    return 1
+    return $apply_status
   fi
 
-  local forward_check_output
-  if forward_check_output=$(git apply --check "$patch_path" 2>&1); then
-    echo "Patch already reversed; skipping $patch_path"
+  if git apply --reverse --check "$patch_path" >/dev/null 2>&1; then
+    echo "Patch already applied; skipping $patch_path"
     return 0
   fi
 
-  printf '%s\n' "$reverse_check_output" >&2
-  return 1
+  printf '%s\n' "$check_output" >&2
+  return $check_status
 }
 
 cd "$REPO_ROOT"
@@ -85,7 +91,7 @@ if [[ $# -eq 1 ]]; then
     echo "Error: could not locate patch file '$1'" >&2
     exit 1
   fi
-  apply_inverse_patch "$patch_file"
+  apply_patch_file "$patch_file"
   exit 0
 fi
 
@@ -104,5 +110,5 @@ if [[ ${#patch_files[@]} -eq 0 ]]; then
 fi
 
 for patch_file in "${patch_files[@]}"; do
-  apply_inverse_patch "$patch_file"
+  apply_patch_file "$patch_file"
 done

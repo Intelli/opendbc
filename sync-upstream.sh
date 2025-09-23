@@ -23,6 +23,7 @@ git restore --source="${TARGET_REF}" --staged --worktree --no-overlay -- \
   ':(top,exclude)sync-upstream.sh' \
   ':(top,exclude)update.sh' \
   ':(top,exclude)apply_patch.sh' \
+  ':(top,exclude)create_patch.sh' \
   ':(top,exclude).gitmodules' \
   ':(top,exclude)patches' \
   ':(top,exclude)opendbc_repo'
