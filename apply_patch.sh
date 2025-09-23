@@ -57,6 +57,11 @@ apply_patch_file() {
   local patch_path="$1"
   echo "Applying $patch_path"
 
+  if git apply --reverse --check "$patch_path" >/dev/null 2>&1; then
+    echo "Patch already applied; skipping $patch_path"
+    return 0
+  fi
+
   local check_output
   check_output=$(git apply --check "$patch_path" 2>&1)
   local check_status=$?
