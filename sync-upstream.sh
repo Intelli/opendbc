@@ -3,6 +3,17 @@ set -euo pipefail
 
 DEFAULT_REF="upstream/hkg-angle-steering-2025"
 
+EXCLUDES=(
+  'AGENTS.md'
+  'sync-upstream.sh'
+  'update.sh'
+  'apply_patch.sh'
+  'create_patch.sh'
+  '.gitmodules'
+  'patches'
+  'opendbc_repo'
+)
+
 if [[ $# -gt 1 ]]; then
   echo "Usage: $0 [commit|ref]" >&2
   exit 1
@@ -17,16 +28,33 @@ if ! git rev-parse --verify "${TARGET_REF}^{commit}" >/dev/null 2>&1; then
   exit 1
 fi
 
-git restore --source="${TARGET_REF}" --staged --worktree --no-overlay -- \
-  . \
-  ':(top,exclude)AGENTS.md' \
-  ':(top,exclude)sync-upstream.sh' \
-  ':(top,exclude)update.sh' \
-  ':(top,exclude)apply_patch.sh' \
-  ':(top,exclude)create_patch.sh' \
-  ':(top,exclude).gitmodules' \
-  ':(top,exclude)patches' \
-  ':(top,exclude)opendbc_repo'
+PRE_SYNC_REF="$(git rev-parse --verify HEAD)"
+
+# Prefer upstream changes on overlap; excluded files get restored after.
+if ! git merge --no-edit -X theirs "${TARGET_REF}"; then
+  echo "Merge with '${TARGET_REF}' failed. Aborting merge; please resolve issues manually." >&2
+  git merge --abort >/dev/null 2>&1 || true
+  exit 1
+fi
+
+restore_args=(
+  "--source=${TARGET_REF}"
+  --staged
+  --worktree
+  --no-overlay
+  --
+  .
+)
+
+for path in "${EXCLUDES[@]}"; do
+  restore_args+=(":(top,exclude)${path}")
+done
+
+git restore "${restore_args[@]}"
+
+if [[ ${#EXCLUDES[@]} -gt 0 ]]; then
+  git restore --source="${PRE_SYNC_REF}" --staged --worktree -- "${EXCLUDES[@]}"
+fi
 
 # Align submodules to upstream commit while keeping opendbc_repo managed separately.
 submodules=()
