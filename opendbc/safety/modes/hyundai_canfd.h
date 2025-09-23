@@ -207,6 +207,13 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
     };
   
 
+  // KIA_EV9 vehicle model params (values can be found on values.py)
+  const AngleSteeringParams HYUNDAI_STEERING_PARAMS_EV9 = {
+    .slip_factor = -0.0005410588125765342,  // calc_slip_factor(VM)
+    .steer_ratio = 16.0,
+    .wheelbase = 3.10,
+  };
+
   bool tx = true;
 
   // steering
