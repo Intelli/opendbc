@@ -24,7 +24,7 @@ index 4a7b8f17..8fe758e3 100644
      # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
      if candidate in (CAR.KIA_OPTIMA_H,):
 diff --git b/opendbc/car/hyundai/values.py a/opendbc/car/hyundai/values.py
-index cebcf3c7..67cbc45c 100644
+index 3ed3721f..2955842f 100644
 --- b/opendbc/car/hyundai/values.py
 +++ a/opendbc/car/hyundai/values.py
 @@ -1,6 +1,6 @@
@@ -54,7 +54,7 @@ index cebcf3c7..67cbc45c 100644
    # Dynamic Flags
  
 diff --git b/opendbc/safety/modes/hyundai_canfd.h a/opendbc/safety/modes/hyundai_canfd.h
-index 44607d2d..6b2e7db3 100644
+index 174d8fb7..676a25b8 100644
 --- b/opendbc/safety/modes/hyundai_canfd.h
 +++ a/opendbc/safety/modes/hyundai_canfd.h
 @@ -48,6 +48,8 @@
@@ -66,9 +66,9 @@ index 44607d2d..6b2e7db3 100644
  
  static unsigned int hyundai_canfd_get_lka_addr(void) {
    return hyundai_canfd_lka_steering_alt ? 0x110U : 0x50U;
-@@ -197,6 +199,13 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
-     .wheelbase = 2.81,
-   };
+@@ -205,6 +207,13 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+     };
+   
  
 +  // KIA_EV9 vehicle model params (values can be found on values.py)
 +  const AngleSteeringParams HYUNDAI_STEERING_PARAMS_EV9 = {
@@ -80,7 +80,7 @@ index 44607d2d..6b2e7db3 100644
    bool tx = true;
  
    // steering
-@@ -209,7 +218,12 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+@@ -217,7 +226,12 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
        int desired_angle = (msg->data[11] << 6U) | (msg->data[10] >> 2U);
        desired_angle = to_signed(desired_angle, 14);
  
@@ -94,7 +94,7 @@ index 44607d2d..6b2e7db3 100644
          tx = false;
        }
      } else {
-@@ -278,6 +292,9 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+@@ -286,6 +300,9 @@ static safety_config hyundai_canfd_init(uint16_t param) {
    const int HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT = 128;
    const int HYUNDAI_PARAM_CANFD_ALT_BUTTONS = 32;
    const int HYUNDAI_PARAM_CANFD_ANGLE_STEERING = 1024;
@@ -104,7 +104,7 @@ index 44607d2d..6b2e7db3 100644
  
    static const CanMsg HYUNDAI_CANFD_LKA_STEERING_TX_MSGS[] = {
      HYUNDAI_CANFD_LKA_STEERING_COMMON_TX_MSGS(0, 1)
-@@ -329,6 +346,8 @@ static safety_config hyundai_canfd_init(uint16_t param) {
+@@ -337,6 +354,8 @@ static safety_config hyundai_canfd_init(uint16_t param) {
    hyundai_canfd_angle_steering = GET_FLAG(param, HYUNDAI_PARAM_CANFD_ANGLE_STEERING);
    // TODO: test this restriction
    hyundai_canfd_lka_steering_alt = GET_FLAG(param, HYUNDAI_PARAM_CANFD_LKA_STEERING_ALT);
