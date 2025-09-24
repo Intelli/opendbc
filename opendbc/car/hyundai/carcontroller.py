@@ -223,9 +223,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         panda_platform_id = 0
 
       if (self.CP.carFingerprint != ANGLE_SAFETY_BASELINE_MODEL) and (panda_platform_id == 0):
-        # preserve 0.0 angles; only fall back when apply_angle is None
-        apply_angle = apply_steer_angle_limits_vm(apply_angle if apply_angle is not None else desired_angle,
-                                                  self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive,
+        apply_angle = apply_steer_angle_limits_vm(apply_angle or desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive,
                                                   self.params, self.BASELINE_VM)
 
       # Use saturation-based torque reduction gain
