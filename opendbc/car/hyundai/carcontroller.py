@@ -175,6 +175,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.angle_enable_smoothing_factor = self._params.get_bool("EnableHkgTuningAngleSmoothingFactor")
 
       self.params.ANGLE_LIMITS.MAX_ANGLE_RATE = int(self._params.get("HkgTuningAngleMaxAngleRate", return_default=True))
+      self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = float(self._params.get("HkgTuningAngleMaxLateralAccel", return_default=True))
+      self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = float(self._params.get("HkgTuningAngleMaxLateralJerk", return_default=True))
 
     self.angle_torque_reduction_gain_controller = TorqueReductionGainController(
       angle_threshold=.3,
