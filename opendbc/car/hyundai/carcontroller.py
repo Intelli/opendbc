@@ -174,6 +174,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_TORQUE_OVERRIDE_CYCLES = int(self._params.get("HkgTuningOverridingCycles") or self.params.ANGLE_TORQUE_OVERRIDE_CYCLES)
       self.angle_enable_smoothing_factor = self._params.get_bool("EnableHkgTuningAngleSmoothingFactor")
 
+      angle_rate_param = self._params.get("HkgTuningAngleMaxAngleRate")
+      try:
+        angle_rate = int(angle_rate_param) if angle_rate_param else self.params.ANGLE_LIMITS.MAX_ANGLE_RATE
+      except ValueError:
+        angle_rate = self.params.ANGLE_LIMITS.MAX_ANGLE_RATE
+      self.params.ANGLE_LIMITS.MAX_ANGLE_RATE = float(max(1, min(angle_rate, 9)))
+
     self.angle_torque_reduction_gain_controller = TorqueReductionGainController(
       angle_threshold=.3,
       debounce_time=.1,
