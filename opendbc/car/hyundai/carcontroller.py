@@ -179,7 +179,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         angle_rate = int(angle_rate_param) if angle_rate_param else self.params.ANGLE_LIMITS.MAX_ANGLE_RATE
       except ValueError:
         angle_rate = self.params.ANGLE_LIMITS.MAX_ANGLE_RATE
-      self.params.ANGLE_LIMITS.MAX_ANGLE_RATE = float(max(1, min(angle_rate, 9)))
+      self.params.ANGLE_LIMITS.MAX_ANGLE_RATE = float(max(0, min(angle_rate, 30)))
 
     self.angle_torque_reduction_gain_controller = TorqueReductionGainController(
       angle_threshold=.3,
