@@ -159,7 +159,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     # For future parametrization / tuning
     self.angle_enable_smoothing_factor = True
-    self.angle_limit_speed_threshold = 0.0
+    self.angle_limit_speed_threshold = 32.0 / 3.6
 
     self._params = Params() if PARAMS_AVAILABLE else None
     if PARAMS_AVAILABLE:
@@ -175,7 +175,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_TORQUE_OVERRIDE_CYCLES = int(self._params.get("HkgTuningOverridingCycles") or self.params.ANGLE_TORQUE_OVERRIDE_CYCLES)
       self.angle_enable_smoothing_factor = self._params.get_bool("EnableHkgTuningAngleSmoothingFactor")
 
-      speed_threshold_mps = float(self._params.get("HkgTuningAngleCustomLimitMaxSpeedKph", return_default=True)) / 3.6
+      speed_threshold = self._params.get("HkgTuningAngleCustomLimitMaxSpeedKph", return_default=True)
+      if speed_threshold is None:
+        speed_threshold_mps = 32.0 / 3.6
+      else:
+        speed_threshold_mps = float(speed_threshold) / 3.6
       self.angle_limit_speed_threshold = max(0.0, speed_threshold_mps)
 
     self.angle_torque_reduction_gain_controller = TorqueReductionGainController(
