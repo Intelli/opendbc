@@ -301,7 +301,7 @@ bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, co
 
   const float fudged_speed = MAX((vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.0, 1.0);
   const bool using_ev9_vm = (params.steer_ratio > 15.5F) && (params.wheelbase > 3.0F);
-  const bool use_high_limits = using_ev9_vm && (fudged_speed <= ((50.0F / 3.6F) + 0.1F));  // EV9: 4.2 m/s^2, taper above ~50 km/h
+  const bool use_high_limits = using_ev9_vm && (fudged_speed <= ((42.0F / 3.6F) + 0.1F));  // EV9: 4.2 m/s^2, taper above ~42 km/h
   const float MAX_LATERAL_ACCEL = use_high_limits ? 4.2F : (ISO_LATERAL_ACCEL + (EARTH_G * AVERAGE_ROAD_ROLL));
   // Lower than ISO 11270 lateral jerk limit, which is 5.0 m/s^3
   const float MAX_LATERAL_JERK = use_high_limits ? 4.2F : (3.0F + (EARTH_G * AVERAGE_ROAD_ROLL));
