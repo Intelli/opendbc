@@ -299,12 +299,13 @@ bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, co
   // This check uses a simple vehicle model to allow for constant lateral acceleration and jerk limits across all speeds.
   // TODO: remove the inaccurate breakpoint angle limiting function above and always use this one
 
-  // Highway curves are rolled in the direction of the turn, add tolerance to compensate
-  static const float MAX_LATERAL_ACCEL = ISO_LATERAL_ACCEL + (EARTH_G * AVERAGE_ROAD_ROLL);  // ~3.6 m/s^2
-  // Lower than ISO 11270 lateral jerk limit, which is 5.0 m/s^3
-  static const float MAX_LATERAL_JERK = 3.0 + (EARTH_G * AVERAGE_ROAD_ROLL);  // ~3.6 m/s^3
-
   const float fudged_speed = MAX((vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.0, 1.0);
+  const bool using_ev9_vm = (params.steer_ratio > 15.5F) && (params.wheelbase > 3.0F);
+  const bool use_high_limits = using_ev9_vm && (fudged_speed <= ((50.0F / 3.6F) + 0.1F));  // EV9: 4.2 m/s^2, taper above ~50 km/h
+  const float MAX_LATERAL_ACCEL = use_high_limits ? 4.2F : (ISO_LATERAL_ACCEL + (EARTH_G * AVERAGE_ROAD_ROLL));
+  // Lower than ISO 11270 lateral jerk limit, which is 5.0 m/s^3
+  const float MAX_LATERAL_JERK = use_high_limits ? 4.2F : (3.0F + (EARTH_G * AVERAGE_ROAD_ROLL));
+
   const float curvature_factor = get_curvature_factor(fudged_speed, params);
 
   bool violation = false;
