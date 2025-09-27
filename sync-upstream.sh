@@ -9,6 +9,8 @@ EXCLUDES=(
   'update.sh'
   'apply_patch.sh'
   'create_patch.sh'
+  'create_patch_manual.sh'
+  'update_patch.sh'
   '.gitmodules'
   'patches'
   'opendbc_repo'
