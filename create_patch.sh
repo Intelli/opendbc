@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <name>" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "Usage: $0 <name> [update]" >&2
   exit 1
 fi
 
@@ -10,6 +10,10 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 cd "$script_dir"
 
 patch_name="$1"
+update_mode="false"
+if [[ ${2:-} == "update" || ${2:-} == "-u" || ${2:-} == "--update" ]]; then
+  update_mode="true"
+fi
 patch_dir="$script_dir/patches"
 mkdir -p "$patch_dir"
 
@@ -19,9 +23,11 @@ else
   patch_path="$patch_dir/$patch_name.patch"
 fi
 
-if [[ -e "$patch_path" ]]; then
-  echo "Patch file $patch_path already exists." >&2
-  exit 1
+if [[ "$update_mode" != "true" ]]; then
+  if [[ -e "$patch_path" ]]; then
+    echo "Patch file $patch_path already exists." >&2
+    exit 1
+  fi
 fi
 
 if ! command -v git >/dev/null 2>&1; then
@@ -43,6 +49,11 @@ fi
 echo "[1/6] Syncing upstream..."
 "$script_dir/sync-upstream.sh"
 
+if [[ "$update_mode" == "true" ]]; then
+  echo "Deleting existing patch (if present): $patch_path"
+  rm -f "$patch_path"
+fi
+
 echo "[2/6] Applying existing patches..."
 "$script_dir/apply_patch.sh"
 
@@ -55,7 +66,8 @@ if git diff --cached --quiet; then
 fi
 
 echo "[4/6] Creating inverse patch at $patch_path"
-git diff --cached -R > "$patch_path"
+# Exclude patch files from the generated diff to avoid self-referential diffs
+git diff --cached -R -- . ':(exclude)patches/*.patch' > "$patch_path"
 
 echo "[5/6] Verifying patches can be applied (idempotent check)..."
 "$script_dir/apply_patch.sh"
