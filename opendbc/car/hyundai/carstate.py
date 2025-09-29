@@ -88,8 +88,12 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     return usable_kwh_map.get(fingerprint)
 
   def _compute_range_outputs(self, car_state_sp: structs.CarStateSP) -> None:
-    override_kwh = self._params.get_float("EvBatteryUsableKwh")
-    usable_kwh = override_kwh if override_kwh and override_kwh > 0.0 else self._get_usable_kwh(self.CP.carFingerprint)
+    override_kwh_raw = self._params.get("EvBatteryUsableKwh", return_default=True)
+    try:
+      override_kwh = float(override_kwh_raw)
+    except (TypeError, ValueError):
+      override_kwh = 0.0
+    usable_kwh = override_kwh if override_kwh > 0.0 else self._get_usable_kwh(self.CP.carFingerprint)
     eff_km_per_kwh = max(self._cluster_efficiency_raw * 0.1, 0.0)
     soc = self._bms_soc if self._bms_soc is not None else 0.0
 
@@ -103,14 +107,18 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       car_state_sp.liveRange = 0.0
 
   def _maybe_learn_capacity(self, car_state_sp: structs.CarStateSP) -> None:
-    stored = self._params.get_float("EvBatteryUsableKwh")
-    if stored and stored > 0.0:
+    stored_raw = self._params.get("EvBatteryUsableKwh", return_default=True)
+    try:
+      stored = float(stored_raw)
+    except (TypeError, ValueError):
+      stored = 0.0
+    if stored > 0.0:
       return
 
     if car_state_sp.stateOfCharge >= 0.99 and car_state_sp.liveEfficiency > 0.0 and car_state_sp.dte > 50.0:
       estimate = car_state_sp.dte / car_state_sp.liveEfficiency
       if 40.0 < estimate < 120.0:
-        self._params.put_nonblocking("EvBatteryUsableKwh", f"{estimate:.3f}".encode())
+        self._params.put_nonblocking("EvBatteryUsableKwh", estimate)
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
