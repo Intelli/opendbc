@@ -110,7 +110,7 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     if car_state_sp.stateOfCharge >= 0.99 and car_state_sp.liveEfficiency > 0.0 and car_state_sp.dte > 50.0:
       estimate = car_state_sp.dte / car_state_sp.liveEfficiency
       if 40.0 < estimate < 120.0:
-        self._params.put_nonblocking("EvBatteryUsableKwh", f"{estimate:.3f}")
+        self._params.put_nonblocking("EvBatteryUsableKwh", f"{estimate:.3f}".encode())
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
