@@ -1,0 +1,13 @@
+diff --git b/opendbc/car/hyundai/interface.py a/opendbc/car/hyundai/interface.py
+index 8fe758e3..250601e8 100644
+--- b/opendbc/car/hyundai/interface.py
++++ a/opendbc/car/hyundai/interface.py
+@@ -120,7 +120,7 @@ class CarInterface(CarInterfaceBase):
+ 
+     ret.centerToFront = ret.wheelbase * 0.4
+     ret.steerActuatorDelay = 0.1
+-    ret.steerLimitTimer = 0.4
++    ret.steerLimitTimer = 0.3  # Reduced from 0.4s for faster saturation detection
+ 
+     if not (ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING):
+       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
