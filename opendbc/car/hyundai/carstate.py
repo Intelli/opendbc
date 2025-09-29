@@ -73,6 +73,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     self.is_canfd_angle_steering = CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING
     self.imu_lateral_acceleration = 0.0  # used for CAN FD cars with angle steering
     self.hands_on_steering_grip = 0
+    self.ev_efficiency_km_per_kwh = 0.0
+    self.ev_efficiency_valid = False
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -254,6 +256,16 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     ret.standstill = cp.vl["WHEEL_SPEEDS"]["WHL_SpdFLVal"] <= STANDSTILL_THRESHOLD and cp.vl["WHEEL_SPEEDS"]["WHL_SpdFRVal"] <= STANDSTILL_THRESHOLD and \
                      cp.vl["WHEEL_SPEEDS"]["WHL_SpdRLVal"] <= STANDSTILL_THRESHOLD and cp.vl["WHEEL_SPEEDS"]["WHL_SpdRRVal"] <= STANDSTILL_THRESHOLD
 
+    inst_efficiency = cp.vl.get("VCU_05", {}).get("VCU_InstFuelEcoVal_PerkWh", 0.0)
+    inst_efficiency_valid = 0.0 < inst_efficiency < 100.0
+    if self.CP.flags & HyundaiFlags.EV and inst_efficiency_valid:
+      if not self.ev_efficiency_valid:
+        self.ev_efficiency_km_per_kwh = inst_efficiency
+        self.ev_efficiency_valid = True
+      else:
+        alpha = 0.1
+        self.ev_efficiency_km_per_kwh = (alpha * inst_efficiency) + ((1 - alpha) * self.ev_efficiency_km_per_kwh)
+
     ret.steeringRateDeg = cp.vl["STEERING_SENSORS"]["STEERING_RATE"]
     ret.steeringAngleDeg = cp.vl["MDPS"]["MDPS_EstStrAnglVal"]
     ret.steeringTorque = cp.vl["MDPS"]["MDPS_StrTqSnsrVal"]
@@ -299,6 +311,12 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     # TODO: find this message on ICE & HYBRID cars + cruise control signals (if exists)
     if self.CP.flags & HyundaiFlags.EV:
       ret.cruiseState.nonAdaptive = cp.vl["MANUAL_SPEED_LIMIT_ASSIST"]["MSLA_ENABLED"] == 1
+
+    if self.CP.carFingerprint == CAR.KIA_EV9 and self.ev_efficiency_valid and 0.0 < ret.fuelGauge <= 1.0:
+      remaining_kwh = max(0.0, 96.0 * ret.fuelGauge)
+      live_range_km = remaining_kwh * self.ev_efficiency_km_per_kwh
+      ret_sp.liveEfficiencyKmPerKwh = float(self.ev_efficiency_km_per_kwh)
+      ret_sp.liveRangeKm = float(live_range_km)
 
     prev_cruise_buttons = self.cruise_buttons[-1]
     prev_main_buttons = self.main_buttons[-1]
