@@ -1,6 +1,7 @@
 from collections import deque
 import copy
 import math
+from typing import Optional
 
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, create_button_events, structs
@@ -13,6 +14,7 @@ from opendbc.sunnypilot.car.hyundai.carstate_ext import CarStateExt
 from opendbc.sunnypilot.car.hyundai.escc import EsccCarStateBase
 from opendbc.sunnypilot.car.hyundai.mads import MadsCarState
 from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
+from openpilot.common.params import Params
 
 ButtonType = structs.CarState.ButtonEvent.Type
 
@@ -73,6 +75,42 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     self.is_canfd_angle_steering = CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING
     self.imu_lateral_acceleration = 0.0  # used for CAN FD cars with angle steering
     self.hands_on_steering_grip = 0
+    self._cluster_efficiency_raw: float = 0.0
+    self._bms_soc: Optional[float] = None
+    self._params = Params()
+
+  @staticmethod
+  def _get_usable_kwh(fingerprint: CAR) -> Optional[float]:
+    # Usable battery capacities (kWh) for supported EVs; expand as we validate more platforms.
+    usable_kwh_map: dict[CAR, float] = {
+      CAR.KIA_EV9: 96.0,
+    }
+    return usable_kwh_map.get(fingerprint)
+
+  def _compute_range_outputs(self, car_state_sp: structs.CarStateSP) -> None:
+    override_kwh = self._params.get_float("EvBatteryUsableKwh")
+    usable_kwh = override_kwh if override_kwh and override_kwh > 0.0 else self._get_usable_kwh(self.CP.carFingerprint)
+    eff_km_per_kwh = max(self._cluster_efficiency_raw * 0.1, 0.0)
+    soc = self._bms_soc if self._bms_soc is not None else 0.0
+
+    car_state_sp.liveEfficiency = eff_km_per_kwh
+    car_state_sp.stateOfCharge = soc
+    car_state_sp.batteryCapacity = usable_kwh if usable_kwh is not None else 0.0
+
+    if eff_km_per_kwh > 0.0 and usable_kwh and soc > 0.0:
+      car_state_sp.liveRange = eff_km_per_kwh * usable_kwh * soc
+    else:
+      car_state_sp.liveRange = 0.0
+
+  def _maybe_learn_capacity(self, car_state_sp: structs.CarStateSP) -> None:
+    stored = self._params.get_float("EvBatteryUsableKwh")
+    if stored and stored > 0.0:
+      return
+
+    if car_state_sp.stateOfCharge >= 0.99 and car_state_sp.liveEfficiency > 0.0 and car_state_sp.dte > 50.0:
+      estimate = car_state_sp.dte / car_state_sp.liveEfficiency
+      if 40.0 < estimate < 120.0:
+        self._params.put_nonblocking("EvBatteryUsableKwh", f"{estimate:.3f}")
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -92,6 +130,16 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     cp_cruise = cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC else cp
     self.is_metric = cp.vl["CLU11"]["CF_Clu_SPEED_UNIT"] == 0
     speed_conv = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+
+    if "CLU13" in cp.vl:
+      self._cluster_efficiency_raw = cp.vl["CLU13"].get("CF_Clu_AvgFCI", 0)
+      ret_sp.dte = cp.vl["CLU13"].get("CF_Clu_DTE", 0)
+    if "CLU_HU_P_05" in cp.vl:
+      self._cluster_efficiency_raw = max(self._cluster_efficiency_raw, cp.vl["CLU_HU_P_05"].get("Clu_AFC", 0))
+      if ret_sp.dte == 0:
+        ret_sp.dte = cp.vl["CLU_HU_P_05"].get("Clu_DTE", 0)
+    if "BAT11" in cp.vl:
+      self._bms_soc = cp.vl["BAT11"].get("BAT_SOC", 0) / 100.0
 
     ret.doorOpen = any([cp.vl["CGW1"]["CF_Gway_DrvDrSw"], cp.vl["CGW1"]["CF_Gway_AstDrSw"],
                         cp.vl["CGW2"]["CF_Gway_RLDrSw"], cp.vl["CGW2"]["CF_Gway_RRDrSw"]])
@@ -219,6 +267,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       self.low_speed_alert = False
     ret.lowSpeedAlert = self.low_speed_alert
 
+    self._compute_range_outputs(ret_sp)
+    self._maybe_learn_capacity(ret_sp)
     return ret, ret_sp
 
   def update_canfd(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
@@ -230,6 +280,16 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
 
     self.is_metric = cp.vl["CRUISE_BUTTONS_ALT"]["DISTANCE_UNIT"] != 1
     speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
+
+    if "CLU13" in cp.vl:
+      self._cluster_efficiency_raw = cp.vl["CLU13"].get("CF_Clu_AvgFCI", 0)
+      ret_sp.dte = cp.vl["CLU13"].get("CF_Clu_DTE", 0)
+    if "CLU_HU_P_05" in cp.vl:
+      self._cluster_efficiency_raw = max(self._cluster_efficiency_raw, cp.vl["CLU_HU_P_05"].get("Clu_AFC", 0))
+      if ret_sp.dte == 0:
+        ret_sp.dte = cp.vl["CLU_HU_P_05"].get("Clu_DTE", 0)
+    if "BAT11" in cp.vl:
+      self._bms_soc = cp.vl["BAT11"].get("BAT_SOC", 0) / 100.0
 
     if self.CP.flags & (HyundaiFlags.EV | HyundaiFlags.HYBRID):
       ret.gasPressed = cp.vl[self.accelerator_msg_canfd]["ACCELERATOR_PEDAL"] > 1e-5
@@ -326,6 +386,8 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
 
     ret.blockPcmEnable = not self.recent_button_interaction()
 
+    self._compute_range_outputs(ret_sp)
+    self._maybe_learn_capacity(ret_sp)
     return ret, ret_sp
 
   def get_can_parsers_canfd(self, CP):

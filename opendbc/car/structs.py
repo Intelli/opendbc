@@ -168,4 +168,9 @@ class CarControlSP:
 
 @auto_dataclass
 class CarStateSP:
-  pass
+  speedLimit: float = auto_field()
+  liveEfficiency: float = auto_field()
+  liveRange: float = auto_field()
+  batteryCapacity: float = auto_field()
+  stateOfCharge: float = auto_field()
+  dte: float = auto_field()
