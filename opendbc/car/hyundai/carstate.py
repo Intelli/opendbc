@@ -239,17 +239,19 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       ret.gasPressed = bool(cp.vl[self.accelerator_msg_canfd]["ACCELERATOR_PEDAL_PRESSED"])
 
     if self.CP.flags & HyundaiFlags.EV:
-      soc_bms = cp.vl.get("BMS_01", {}).get("xEV_SocVal")
-      if soc_bms is not None:
-        battery_soc = float(soc_bms) / 255.0
-        if 0.0 <= battery_soc <= 1.0:
-          ret.fuelGauge = battery_soc
-      else:
-        soc_vcu = cp.vl.get("VCU_05", {}).get("VCU_DteSocBasedVal")
-        if soc_vcu is not None:
-          battery_soc = float(soc_vcu) / 100.0
-          if 0.0 <= battery_soc <= 1.0:
-            ret.fuelGauge = battery_soc
+      try:
+        soc_bms = cp.vl["BMS_01_100ms"]["xEV_SocVal"]
+        ret.fuelGauge = float(soc_bms) / 255.0
+      except (KeyError, TypeError):
+        try:
+          soc_vcu = cp.vl["VCU_05"]["VCU_DteSocBasedVal"]
+          ret.fuelGauge = float(soc_vcu) / 2047.0
+        except (KeyError, TypeError):
+          try:
+            soc_bat = cp.vl["BAT11"]["BAT_SOC"]
+            ret.fuelGauge = float(soc_bat) / 100.0
+          except (KeyError, TypeError):
+            ret.fuelGauge = 0.0
 
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
@@ -269,8 +271,14 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     ret.standstill = cp.vl["WHEEL_SPEEDS"]["WHL_SpdFLVal"] <= STANDSTILL_THRESHOLD and cp.vl["WHEEL_SPEEDS"]["WHL_SpdFRVal"] <= STANDSTILL_THRESHOLD and \
                      cp.vl["WHEEL_SPEEDS"]["WHL_SpdRLVal"] <= STANDSTILL_THRESHOLD and cp.vl["WHEEL_SPEEDS"]["WHL_SpdRRVal"] <= STANDSTILL_THRESHOLD
 
-    inst_efficiency = cp.vl.get("VCU_05", {}).get("VCU_InstFuelEcoVal_PerkWh", 0.0)
-    inst_efficiency_valid = 0.0 < inst_efficiency < 100.0
+    inst_efficiency = 0.0
+    inst_efficiency_valid = False
+    if "VCU_05" in cp.vl and "VCU_InstFuelEcoVal_PerkWh" in cp.vl["VCU_05"]:
+      inst_efficiency = cp.vl["VCU_05"]["VCU_InstFuelEcoVal_PerkWh"]
+      inst_efficiency_valid = 0.0 < inst_efficiency < 100.0
+    if not inst_efficiency_valid and "CLU13" in cp.vl and "CF_Clu_AvgFCI" in cp.vl["CLU13"]:
+      inst_efficiency = cp.vl["CLU13"]["CF_Clu_AvgFCI"]
+      inst_efficiency_valid = inst_efficiency > 0.0
     if self.CP.flags & HyundaiFlags.EV and inst_efficiency_valid:
       if not self.ev_efficiency_valid:
         self.ev_efficiency_km_per_kwh = inst_efficiency
