@@ -239,19 +239,15 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       ret.gasPressed = bool(cp.vl[self.accelerator_msg_canfd]["ACCELERATOR_PEDAL_PRESSED"])
 
     if self.CP.flags & HyundaiFlags.EV:
-      try:
-        soc_bms = cp.vl["BMS_01_100ms"]["xEV_SocVal"]
-        ret.fuelGauge = float(soc_bms) / 255.0
-      except (KeyError, TypeError):
-        try:
-          soc_vcu = cp.vl["VCU_05"]["VCU_DteSocBasedVal"]
-          ret.fuelGauge = float(soc_vcu) / 2047.0
-        except (KeyError, TypeError):
-          try:
-            soc_bat = cp.vl["BAT11"]["BAT_SOC"]
-            ret.fuelGauge = float(soc_bat) / 100.0
-          except (KeyError, TypeError):
-            ret.fuelGauge = 0.0
+      ret.fuelGauge = 0.0
+      for msg, signal, scale in (
+          ("BMS_01", "xEV_SocVal", 255.0),
+          ("VCU_05", "VCU_DteSocBasedVal", 2047.0),
+          ("BAT11", "BAT_SOC", 100.0),
+      ):
+        if msg in cp.vl and signal in cp.vl[msg]:
+          ret.fuelGauge = float(cp.vl[msg][signal]) / scale
+          break
 
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
