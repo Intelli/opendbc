@@ -238,11 +238,18 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     else:
       ret.gasPressed = bool(cp.vl[self.accelerator_msg_canfd]["ACCELERATOR_PEDAL_PRESSED"])
 
-    soc_raw = cp.vl.get("VCU_05", {}).get("VCU_DteSocBasedVal")
-    if soc_raw is not None:
-      battery_soc = float(soc_raw) / 2047.0
-      if 0.0 <= battery_soc <= 1.0:
-        ret.fuelGauge = battery_soc
+    if self.CP.flags & HyundaiFlags.EV:
+      soc_bms = cp.vl.get("BMS_01", {}).get("xEV_SocVal")
+      if soc_bms is not None:
+        battery_soc = float(soc_bms) / 255.0
+        if 0.0 <= battery_soc <= 1.0:
+          ret.fuelGauge = battery_soc
+      else:
+        soc_vcu = cp.vl.get("VCU_05", {}).get("VCU_DteSocBasedVal")
+        if soc_vcu is not None:
+          battery_soc = float(soc_vcu) / 100.0
+          if 0.0 <= battery_soc <= 1.0:
+            ret.fuelGauge = battery_soc
 
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
