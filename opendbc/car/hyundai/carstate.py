@@ -73,8 +73,6 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     self.is_canfd_angle_steering = CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING
     self.imu_lateral_acceleration = 0.0  # used for CAN FD cars with angle steering
     self.hands_on_steering_grip = 0
-    self.ev_efficiency_km_per_kwh = 0.0
-    self.ev_efficiency_valid = False
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -238,24 +236,6 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     else:
       ret.gasPressed = bool(cp.vl[self.accelerator_msg_canfd]["ACCELERATOR_PEDAL_PRESSED"])
 
-    if self.CP.flags & HyundaiFlags.EV:
-      highest_soc = 0.0
-      selected_source = None
-      for msg, signal, scale in (
-          ("BAT11", "BAT_SOC", 100.0),
-          ("VCU_05", "VCU_DteSocBasedVal", 2047.0),
-          ("BMS_01", "xEV_SocVal", 255.0),
-      ):
-        if msg in cp.vl and signal in cp.vl[msg]:
-          value = float(cp.vl[msg][signal]) / scale
-          if value > highest_soc:
-            highest_soc = value
-            selected_source = f"{msg}.{signal}"
-
-      ret.fuelGauge = highest_soc
-      if selected_source is not None:
-        self.soc_source = selected_source
-
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
     ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
@@ -273,23 +253,6 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     )
     ret.standstill = cp.vl["WHEEL_SPEEDS"]["WHL_SpdFLVal"] <= STANDSTILL_THRESHOLD and cp.vl["WHEEL_SPEEDS"]["WHL_SpdFRVal"] <= STANDSTILL_THRESHOLD and \
                      cp.vl["WHEEL_SPEEDS"]["WHL_SpdRLVal"] <= STANDSTILL_THRESHOLD and cp.vl["WHEEL_SPEEDS"]["WHL_SpdRRVal"] <= STANDSTILL_THRESHOLD
-
-    inst_efficiency = 0.0
-    inst_efficiency_valid = False
-    if "VCU_05" in cp.vl and "VCU_InstFuelEcoVal_PerkWh" in cp.vl["VCU_05"]:
-      inst_efficiency = cp.vl["VCU_05"]["VCU_InstFuelEcoVal_PerkWh"]
-      inst_efficiency_valid = 0.0 < inst_efficiency < 100.0
-    if not inst_efficiency_valid and "CLU13" in cp.vl and "CF_Clu_AvgFCI" in cp.vl["CLU13"]:
-      inst_efficiency = cp.vl["CLU13"]["CF_Clu_AvgFCI"]
-      inst_efficiency_valid = inst_efficiency > 0.0
-    if self.CP.flags & HyundaiFlags.EV and inst_efficiency_valid:
-      if not self.ev_efficiency_valid:
-        self.ev_efficiency_km_per_kwh = inst_efficiency
-        self.ev_efficiency_valid = True
-        self.ev_battery_soc = None
-      else:
-        alpha = 0.1
-        self.ev_efficiency_km_per_kwh = (alpha * inst_efficiency) + ((1 - alpha) * self.ev_efficiency_km_per_kwh)
 
     ret.steeringRateDeg = cp.vl["STEERING_SENSORS"]["STEERING_RATE"]
     ret.steeringAngleDeg = cp.vl["MDPS"]["MDPS_EstStrAnglVal"]
@@ -362,15 +325,6 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     CarStateExt.update_canfd_ext(self, ret, can_parsers)
 
     ret.blockPcmEnable = not self.recent_button_interaction()
-
-    # Estimate the remaining range using SOC and smoothed efficiency when available
-    if self.ev_efficiency_valid and self.CP.flags & HyundaiFlags.EV and 0.0 <= ret.fuelGauge <= 1.0:
-      battery_capacity_kwh = self.get_battery_capacity_kwh()
-      remaining_kwh = max(0.0, battery_capacity_kwh * ret.fuelGauge)
-      live_range_km = remaining_kwh * self.ev_efficiency_km_per_kwh
-
-      ret_sp.liveEfficiencyKmPerKwh = float(self.ev_efficiency_km_per_kwh)
-      ret_sp.liveRangeKm = float(live_range_km)
 
     return ret, ret_sp
 
