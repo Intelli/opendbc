@@ -168,4 +168,6 @@ class CarControlSP:
 
 @auto_dataclass
 class CarStateSP:
-  pass
+  speedLimit: float = auto_field()
+  liveEfficiencyKmPerKwh: float = auto_field()
+  liveRangeKm: float = auto_field()

@@ -238,6 +238,12 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     else:
       ret.gasPressed = bool(cp.vl[self.accelerator_msg_canfd]["ACCELERATOR_PEDAL_PRESSED"])
 
+    soc_raw = cp.vl.get("VCU_05", {}).get("VCU_DteSocBasedVal")
+    if soc_raw is not None:
+      battery_soc = float(soc_raw) / 2047.0
+      if 0.0 <= battery_soc <= 1.0:
+        ret.fuelGauge = battery_soc
+
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
     ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
@@ -262,6 +268,7 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
       if not self.ev_efficiency_valid:
         self.ev_efficiency_km_per_kwh = inst_efficiency
         self.ev_efficiency_valid = True
+        self.ev_battery_soc = None
       else:
         alpha = 0.1
         self.ev_efficiency_km_per_kwh = (alpha * inst_efficiency) + ((1 - alpha) * self.ev_efficiency_km_per_kwh)
@@ -312,12 +319,6 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     if self.CP.flags & HyundaiFlags.EV:
       ret.cruiseState.nonAdaptive = cp.vl["MANUAL_SPEED_LIMIT_ASSIST"]["MSLA_ENABLED"] == 1
 
-    if self.CP.carFingerprint == CAR.KIA_EV9 and self.ev_efficiency_valid and 0.0 < ret.fuelGauge <= 1.0:
-      remaining_kwh = max(0.0, 96.0 * ret.fuelGauge)
-      live_range_km = remaining_kwh * self.ev_efficiency_km_per_kwh
-      ret_sp.liveEfficiencyKmPerKwh = float(self.ev_efficiency_km_per_kwh)
-      ret_sp.liveRangeKm = float(live_range_km)
-
     prev_cruise_buttons = self.cruise_buttons[-1]
     prev_main_buttons = self.main_buttons[-1]
     prev_lda_button = self.lda_button
@@ -343,6 +344,15 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     CarStateExt.update_canfd_ext(self, ret, can_parsers)
 
     ret.blockPcmEnable = not self.recent_button_interaction()
+
+    # Estimate the remaining range using SOC and smoothed efficiency when available
+    if self.ev_efficiency_valid and self.CP.flags & HyundaiFlags.EV and 0.0 <= ret.fuelGauge <= 1.0:
+      battery_capacity_kwh = self.get_battery_capacity_kwh()
+      remaining_kwh = max(0.0, battery_capacity_kwh * ret.fuelGauge)
+      live_range_km = remaining_kwh * self.ev_efficiency_km_per_kwh
+
+      ret_sp.liveEfficiencyKmPerKwh = float(self.ev_efficiency_km_per_kwh)
+      ret_sp.liveRangeKm = float(live_range_km)
 
     return ret, ret_sp
 
