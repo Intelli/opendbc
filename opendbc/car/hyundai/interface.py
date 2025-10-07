@@ -2,8 +2,7 @@ from opendbc.car import Bus, get_safety_config, structs, uds
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.values import HyundaiFlags, CAR, DBC, \
                                                    CANFD_UNSUPPORTED_LONGITUDINAL_CAR, \
-                                                   UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags, \
-                                                   HyundaiCanfdPlatform, HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT
+                                                   UNSUPPORTED_LONGITUDINAL_CAR, HyundaiSafetyFlags
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.disable_ecu import disable_ecu
@@ -157,10 +156,6 @@ class CarInterface(CarInterfaceBase):
 
     if candidate == CAR.KIA_OPTIMA_G4_FL:
       ret.steerActuatorDelay = 0.2
-
-    # EV9: set platform ID for vehicle model selection in panda safety
-    if (ret.flags & HyundaiFlags.CANFD_ANGLE_STEERING) and candidate == CAR.KIA_EV9:
-      ret.safetyConfigs[-1].safetyParam |= (HyundaiCanfdPlatform.EV9.value << HYUNDAI_CANFD_PARAM_PLATFORM_ID_SHIFT)
 
     # Dashcam cars are missing a test route, or otherwise need validation
     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
