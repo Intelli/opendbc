@@ -1,8 +1,8 @@
 diff --git b/opendbc/car/hyundai/carcontroller.py a/opendbc/car/hyundai/carcontroller.py
-index 8fc563b1..02c8f64b 100644
+index 82033b17..0910edf5 100644
 --- b/opendbc/car/hyundai/carcontroller.py
 +++ a/opendbc/car/hyundai/carcontroller.py
-@@ -159,6 +159,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -158,6 +158,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
  
      # For future parametrization / tuning
      self.angle_enable_smoothing_factor = True
@@ -10,7 +10,7 @@ index 8fc563b1..02c8f64b 100644
  
      self._params = Params() if PARAMS_AVAILABLE else None
      if PARAMS_AVAILABLE:
-@@ -174,6 +175,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -173,6 +174,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
        self.params.ANGLE_TORQUE_OVERRIDE_CYCLES = int(self._params.get("HkgTuningOverridingCycles") or self.params.ANGLE_TORQUE_OVERRIDE_CYCLES)
        self.angle_enable_smoothing_factor = self._params.get_bool("EnableHkgTuningAngleSmoothingFactor")
  
@@ -24,7 +24,7 @@ index 8fc563b1..02c8f64b 100644
      self.angle_torque_reduction_gain_controller = TorqueReductionGainController(
        angle_threshold=.3,
        debounce_time=.1,
-@@ -209,6 +217,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -208,6 +216,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
        if self.angle_enable_smoothing_factor and abs(v_ego_raw) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
          desired_angle = sp_smooth_angle(v_ego_raw, desired_angle, self.apply_angle_last)
  
@@ -36,8 +36,8 @@ index 8fc563b1..02c8f64b 100644
 +
        apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
  
-       # Historically we applied the baseline Santa Fe model on top to match Panda's hardcoded baseline.
-@@ -224,6 +238,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+       # if we are not the baseline model, we use the baseline model for further limits to prevent a panda block since it is hardcoded for baseline model.
+@@ -215,6 +229,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
          apply_angle = apply_steer_angle_limits_vm(apply_angle or desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive,
                                                    self.params, self.BASELINE_VM)
  
