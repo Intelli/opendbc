@@ -6,14 +6,11 @@ DEFAULT_REF="upstream/hkg-angle-steering-2025"
 EXCLUDES=(
   'AGENTS.md'
   'sync-upstream.sh'
-  'update.sh'
   'apply_patch.sh'
   'create_patch.sh'
   'create_patch_manual.sh'
   'update_patch.sh'
-  '.gitmodules'
   'patches'
-  'opendbc_repo'
 )
 
 if [[ $# -gt 1 ]]; then
