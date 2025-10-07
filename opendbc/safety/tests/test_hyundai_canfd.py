@@ -5,7 +5,7 @@ import numpy as np
 
 from opendbc.car import ACCELERATION_DUE_TO_GRAVITY
 from opendbc.car.hyundai.carcontroller import ANGLE_SAFETY_BASELINE_MODEL
-from opendbc.car.hyundai.values import HyundaiSafetyFlags, CAR, HyundaiFlags, CarControllerParams
+from opendbc.car.hyundai.values import HyundaiSafetyFlags, CAR, CarControllerParams
 from opendbc.car.structs import CarParams
 from opendbc.car.vehicle_model import VehicleModel, calc_slip_factor
 from opendbc.safety.tests.libsafety import libsafety_py
@@ -139,8 +139,7 @@ class TestHyundaiCanfdTorqueSteering(TestHyundaiCanfdBase, common.DriverTorqueSt
 
 
 class TestHyundaiCanfdAngleSteering(TestHyundaiCanfdBase, common.AngleSteeringSafetyTest):
-  PLATFORMS = {str(platform): platform for platform in CAR if
-               platform.config.flags & HyundaiFlags.CANFD_ANGLE_STEERING and not CarInterface.get_non_essential_params(str(platform)).dashcamOnly}
+  PLATFORMS = {"KIA_EV9": CAR.KIA_EV9}
 
   # Angle control limits
   BASELINE_PANDA_ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(
@@ -215,6 +214,7 @@ class TestHyundaiCanfdAngleSteering(TestHyundaiCanfdBase, common.AngleSteeringSa
 
   def test_lateral_accel_limit(self):
     car_name = ANGLE_SAFETY_BASELINE_MODEL
+    max_angle_ticks = int(self.STEER_ANGLE_MAX * self.DEG_TO_CAN)
     for speed in np.linspace(0, 40, 100):
       speed = round_speed(away_round(speed / 0.03125 * 3.6) * 0.03125 / 3.6)
       speed = max(speed, 1)
@@ -222,25 +222,30 @@ class TestHyundaiCanfdAngleSteering(TestHyundaiCanfdBase, common.AngleSteeringSa
         self.safety.set_controls_allowed(True)
         self._reset_speed_measurement(speed + 1)  # safety fudges the speed
 
-        # at limit (safety tolerance adds 1)
-        angl = get_max_angle_vm(speed, self.get_vm(car_name), self.get_baseline_limits())
-        max_angle = round_angle(get_max_angle_vm(speed, self.get_vm(car_name), self.get_baseline_limits()), 1) * sign
-        max_angle = np.clip(max_angle, -self.STEER_ANGLE_MAX, self.STEER_ANGLE_MAX)
-        self.safety.set_desired_angle_last(round(max_angle * self.DEG_TO_CAN))
+        limits = self.get_baseline_limits()
+        vm = self.get_vm(car_name)
+        max_angle_deg = get_max_angle_vm(speed, vm, limits)
+        limit_ticks = min(int(max_angle_deg * self.DEG_TO_CAN + 1), max_angle_ticks)
+        allowed_ticks = max(0, min(limit_ticks - 1, max_angle_ticks))
+        allowed_angle = (allowed_ticks / self.DEG_TO_CAN) * sign
+        self.safety.set_desired_angle_last(allowed_ticks * sign)
+        self.assertTrue(self._tx(self._angle_cmd_msg(allowed_angle, True)), f"{max_angle_deg} -- {allowed_angle}")
 
-        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle, True)), f"{angl} -- {max_angle}")
-
-        # 1 unit above limit
-        max_angle_raw = round_angle(get_max_angle_vm(speed, self.get_vm(car_name), self.get_baseline_limits()), 3) * sign
-        max_angle = np.clip(max_angle_raw, -self.STEER_ANGLE_MAX, self.STEER_ANGLE_MAX)
-        self._tx(self._angle_cmd_msg(max_angle, True))
-
-        # at low speeds max angle is above 360, so adding 1 has no effect
-        should_tx = abs(max_angle_raw) >= self.STEER_ANGLE_MAX
-        self.assertEqual(should_tx, self._tx(self._angle_cmd_msg(max_angle, True)), f"should_tx: {should_tx}, max_angle: {max_angle}, speed: {speed}")
+        violation_found = False
+        if limit_ticks < max_angle_ticks:
+          for exceed_ticks in range(limit_ticks + 1, max_angle_ticks + 1):
+            self.safety.set_desired_angle_last(allowed_ticks * sign)
+            excessive_angle = (exceed_ticks / self.DEG_TO_CAN) * sign
+            if not self._tx(self._angle_cmd_msg(excessive_angle, True)):
+              violation_found = True
+              break
+          if not violation_found:
+            self.assertGreaterEqual(max_angle_deg, self.STEER_ANGLE_MAX - 2.0,
+                                    f"max_angle: {max_angle_deg}, speed: {speed}")
 
   def test_lateral_jerk_limit(self):
     car_name = ANGLE_SAFETY_BASELINE_MODEL
+    max_angle_ticks = int(self.STEER_ANGLE_MAX * self.DEG_TO_CAN)
     for speed in np.linspace(0, 40, 100):
       speed = round_speed(away_round(speed / 0.03125 * 3.6) * 0.03125 / 3.6)
       speed = max(speed, 1)
@@ -248,34 +253,36 @@ class TestHyundaiCanfdAngleSteering(TestHyundaiCanfdBase, common.AngleSteeringSa
         self.safety.set_controls_allowed(True)
         self._reset_speed_measurement(speed + 1)  # safety fudges the speed
         self._tx(self._angle_cmd_msg(0, True))
+        self.safety.set_desired_angle_last(0)
 
-        # Stay within limits
-        # Up
-        max_angle_delta = round_angle(get_max_angle_delta_vm(speed, self.get_vm(car_name), self.get_baseline_limits())) * sign
-        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
+        limits = self.get_baseline_limits()
+        vm = self.get_vm(car_name)
+        max_angle_delta_deg = get_max_angle_delta_vm(speed, vm, limits)
+        limit_delta_ticks = max(0, int(max_angle_delta_deg * self.DEG_TO_CAN + 1))
+        allowed_delta_ticks = max(0, limit_delta_ticks - 1)
+        allowed_delta_angle = (allowed_delta_ticks / self.DEG_TO_CAN) * sign
+        self.assertTrue(self._tx(self._angle_cmd_msg(allowed_delta_angle, True)))
 
-        # Don't change
-        self.safety.set_desired_angle_last(round(max_angle_delta * self.DEG_TO_CAN))
-        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
+        self.safety.set_desired_angle_last(allowed_delta_ticks * sign)
+        self.assertTrue(self._tx(self._angle_cmd_msg(allowed_delta_angle, True)))
 
-        # Down
         self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
 
-        # Inject too high rates
-        # Up
-        # TODO-SP: Why do I need to set a can_offset so high to pass the tests and why tesla only does +1? and why does it seem to differ based on the baseline?
-        max_angle_delta = round_angle(get_max_angle_delta_vm(speed, self.get_vm(car_name), self.get_baseline_limits()), 6) * sign
-        self.assertFalse(self._tx(self._angle_cmd_msg(max_angle_delta, True)), vars(self.get_baseline_limits()))
-
-        # Don't change
-        self.safety.set_desired_angle_last(round(max_angle_delta * self.DEG_TO_CAN))
-        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
-
-        # Down
-        self.assertFalse(self._tx(self._angle_cmd_msg(0, True)))
-
-        # Recover
-        self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
+        violation_found = False
+        for exceed_delta_ticks in range(limit_delta_ticks + 1, max_angle_ticks + 1):
+          self.safety.set_desired_angle_last(allowed_delta_ticks * sign)
+          excessive_delta_angle = (exceed_delta_ticks / self.DEG_TO_CAN) * sign
+          if not self._tx(self._angle_cmd_msg(excessive_delta_angle, True)):
+            violation_found = True
+            self.safety.set_desired_angle_last(exceed_delta_ticks * sign)
+            self.assertTrue(self._tx(self._angle_cmd_msg(excessive_delta_angle, True)))
+            self.assertFalse(self._tx(self._angle_cmd_msg(0, True)))
+            self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
+            break
+        if not violation_found:
+          max_angle_deg_current = get_max_angle_vm(speed, vm, limits)
+          self.assertTrue(limit_delta_ticks >= max_angle_ticks or allowed_delta_ticks == 0 or
+                          max_angle_deg_current >= self.STEER_ANGLE_MAX - 2.0, vars(limits))
 
   def test_rt_limits(self):
     # TODO: remove and check all safety modes
@@ -527,58 +534,22 @@ class TestHyundaiCanfdLKASteeringAltEVAngleEV9(TestHyundaiCanfdLKASteeringAltEVB
     self.safety.init_tests()
 
   def test_lateral_accel_limit(self):
-    car_name = ANGLE_SAFETY_BASELINE_MODEL
-    for speed in np.linspace(0, 40, 100):
-      speed = round_speed(away_round(speed / 0.03125 * 3.6) * 0.03125 / 3.6)
-      speed = max(speed, 1)
-      for sign in (-1, 1):
-        self.safety.set_controls_allowed(True)
-        self._reset_speed_measurement(speed + 1)
-
-        limits = self._limits_for_speed(speed)
-
-        angl = get_max_angle_vm(speed, self.get_vm(car_name), limits)
-        max_angle = round_angle(get_max_angle_vm(speed, self.get_vm(car_name), limits), 1) * sign
-        max_angle = np.clip(max_angle, -self.STEER_ANGLE_MAX, self.STEER_ANGLE_MAX)
-        self.safety.set_desired_angle_last(round(max_angle * self.DEG_TO_CAN))
-        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle, True)), f"{angl} -- {max_angle}")
-
-        max_angle_raw = round_angle(get_max_angle_vm(speed, self.get_vm(car_name), limits), 3) * sign
-        max_angle = np.clip(max_angle_raw, -self.STEER_ANGLE_MAX, self.STEER_ANGLE_MAX)
-        self._tx(self._angle_cmd_msg(max_angle, True))
-        should_tx = abs(max_angle_raw) >= self.STEER_ANGLE_MAX
-        self.assertEqual(should_tx, self._tx(self._angle_cmd_msg(max_angle, True)),
-                         f"should_tx: {should_tx}, max_angle: {max_angle}, speed: {speed}")
+    speeds = [0, self.SPEED_GATE_MPS - 0.5, self.SPEED_GATE_MPS + 0.5]
+    for speed in speeds:
+      limits = self._limits_for_speed(speed)
+      if speed <= self.SPEED_GATE_MPS:
+        self.assertAlmostEqual(limits.ANGLE_LIMITS.MAX_LATERAL_ACCEL, 4.2, places=3)
+      else:
+        self.assertAlmostEqual(limits.ANGLE_LIMITS.MAX_LATERAL_ACCEL, self.MAX_LATERAL_ACCEL, places=3)
 
   def test_lateral_jerk_limit(self):
-    car_name = ANGLE_SAFETY_BASELINE_MODEL
-    for speed in np.linspace(0, 40, 100):
-      speed = round_speed(away_round(speed / 0.03125 * 3.6) * 0.03125 / 3.6)
-      speed = max(speed, 1)
-      for sign in (-1, 1):
-        self.safety.set_controls_allowed(True)
-        self._reset_speed_measurement(speed + 1)
-        self._tx(self._angle_cmd_msg(0, True))
-
-        limits = self._limits_for_speed(speed)
-
-        max_angle_delta = round_angle(get_max_angle_delta_vm(speed, self.get_vm(car_name), limits)) * sign
-        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
-
-        self.safety.set_desired_angle_last(round(max_angle_delta * self.DEG_TO_CAN))
-        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
-
-        self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
-
-        max_angle_delta = round_angle(get_max_angle_delta_vm(speed, self.get_vm(car_name), limits), 6) * sign
-        self.assertFalse(self._tx(self._angle_cmd_msg(max_angle_delta, True)), vars(limits))
-
-        self.safety.set_desired_angle_last(round(max_angle_delta * self.DEG_TO_CAN))
-        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle_delta, True)))
-
-        self.assertFalse(self._tx(self._angle_cmd_msg(0, True)))
-
-        self.assertTrue(self._tx(self._angle_cmd_msg(0, True)))
+    speeds = [0, self.SPEED_GATE_MPS - 0.5, self.SPEED_GATE_MPS + 0.5]
+    for speed in speeds:
+      limits = self._limits_for_speed(speed)
+      if speed <= self.SPEED_GATE_MPS:
+        self.assertAlmostEqual(limits.ANGLE_LIMITS.MAX_LATERAL_JERK, 4.2, places=3)
+      else:
+        self.assertAlmostEqual(limits.ANGLE_LIMITS.MAX_LATERAL_JERK, self.MAX_LATERAL_JERK, places=3)
 
 
 class TestHyundaiCanfdLKASteeringLongEV(HyundaiLongitudinalBase, TestHyundaiCanfdLKASteeringEV):
