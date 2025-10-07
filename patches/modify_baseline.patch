@@ -1,0 +1,33 @@
+diff --git b/opendbc/car/hyundai/carcontroller.py a/opendbc/car/hyundai/carcontroller.py
+index aa38f367..0910edf5 100644
+--- b/opendbc/car/hyundai/carcontroller.py
++++ a/opendbc/car/hyundai/carcontroller.py
+@@ -38,7 +38,7 @@ MAX_ANGLE_FRAMES = 89
+ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
+ 
+ MAX_ANGLE_RATE = 5
+-ANGLE_SAFETY_BASELINE_MODEL = "KIA_SPORTAGE_HEV_2026"
++ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
+ 
+ 
+ def get_baseline_safety_cp():
+diff --git b/opendbc/safety/modes/hyundai_canfd.h a/opendbc/safety/modes/hyundai_canfd.h
+index 174d8fb7..f0d79be3 100644
+--- b/opendbc/safety/modes/hyundai_canfd.h
++++ a/opendbc/safety/modes/hyundai_canfd.h
+@@ -197,11 +197,11 @@ static bool hyundai_canfd_tx_hook(const CANPacket_t *msg) {
+   //   .wheelbase = 2.81,
+   // };
+ 
+-  // KIA_SPORTAGE_HEV_2026 values. (most conservative for now) (values can be found on values.py)
++  // KIA_EV9 values. (values can be found on values.py)
+   const AngleSteeringParams HYUNDAI_STEERING_PARAMS = {
+-      .slip_factor = -0.0006085930193026732,  // calc_slip_factor(VM)
+-      .steer_ratio = 13.7,
+-      .wheelbase = 2.756,
++      .slip_factor = -0.0005410588125765342,  // calc_slip_factor(VM)
++      .steer_ratio = 16.0,
++      .wheelbase = 3.10,
+     };
+   
+ 
