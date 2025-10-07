@@ -38,7 +38,7 @@ MAX_ANGLE_FRAMES = 89
 MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
 MAX_ANGLE_RATE = 5
-ANGLE_SAFETY_BASELINE_MODEL = "KIA_SPORTAGE_HEV_2026"
+ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
 
 
 def get_baseline_safety_cp():
@@ -224,7 +224,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
 
-      # if we are not the baseline model, we use the baseline model for further limits to prevent a panda block since it is hardcoded for baseline model.
+      # If we are not the EV9 baseline, reuse its VM limits to stay aligned with Panda's hardcoded baseline model.
       if self.CP.carFingerprint != ANGLE_SAFETY_BASELINE_MODEL:
         apply_angle = apply_steer_angle_limits_vm(apply_angle or desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive,
                                                   self.params, self.BASELINE_VM)
