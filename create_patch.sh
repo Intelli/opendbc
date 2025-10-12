@@ -70,7 +70,11 @@ echo "[4/6] Creating inverse patch at $patch_path"
 git diff --cached -R -- . ':(exclude)patches/*.patch' > "$patch_path"
 
 echo "[5/6] Verifying patches can be applied (idempotent check)..."
-"$script_dir/apply_patch.sh"
+if [[ "$update_mode" == "true" ]]; then
+  "$script_dir/apply_patch.sh" "$patch_path"
+else
+  "$script_dir/apply_patch.sh"
+fi
 
 echo "[6/6] Staging new patch file..."
 git add "$patch_path"
