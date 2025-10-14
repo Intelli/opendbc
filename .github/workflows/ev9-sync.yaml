@@ -1,0 +1,39 @@
+name: ev9 branch sync
+
+on:
+  push:
+    branches:
+      - ev9-dev
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: sync ev9-dev to ev9
+    runs-on: ubuntu-latest
+    steps:
+      - name: Initialize repository
+        run: |
+          set -euo pipefail
+          git init --initial-branch=main .
+          git config remote.origin.fetch ""
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          else
+            git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          fi
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run sync script
+        env:
+          SYNC_AUTHOR_NAME: GitHub Actions
+          SYNC_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/heads/ev9-dev:refs/remotes/origin/ev9-dev" --refmap=""
+          git fetch --no-tags origin "refs/heads/ev9:refs/remotes/origin/ev9" --refmap=""
+          git reset --hard origin/ev9-dev
+          bash tools/ci/sync_ev9_branch.sh
+
