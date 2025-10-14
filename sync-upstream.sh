@@ -7,6 +7,7 @@ EXCLUDES=(
   'AGENTS.md'
   'sync-upstream.sh'
   'apply_patch.sh'
+  'fix_patch.sh'
   'create_patch.sh'
   'create_patch_manual.sh'
   'update_patch.sh'
