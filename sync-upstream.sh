@@ -9,6 +9,7 @@ EXCLUDES=(
   '.github/workflows/ev9-sync.yaml'
   'tools/ci/sync_ev9_branch.sh'
   'apply_patch.sh'
+  'apply_patch_conflicts.sh'
   'fix_patch.sh'
   'create_patch.sh'
   'create_patch_manual.sh'

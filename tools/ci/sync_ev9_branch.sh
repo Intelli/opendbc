@@ -53,6 +53,28 @@ COMMIT
 new_commit=$(git commit-tree "${dev_tree}" -p "${prod_sha}" -m "${commit_msg}")
 
 echo "Pushing ${new_commit} to ev9 (tree ${dev_tree})"
+
+# Temporarily disable LFS pushurl/url (CI uses HTTPS token)
+lfs_url="$(git config --get lfs.url || echo '')"
+lfs_pushurl="$(git config --get lfs.pushurl || echo '')"
+unset_lfs=0
+if [[ -n "${lfs_pushurl}" ]]; then
+  git config --unset lfs.pushurl
+  unset_lfs=1
+fi
+if [[ -n "${lfs_url}" ]]; then
+  git config --unset lfs.url
+  unset_lfs=1
+fi
+
+restore_lfs() {
+  if [[ ${unset_lfs} -eq 1 ]]; then
+    [[ -n "${lfs_url}" ]] && git config lfs.url "${lfs_url}"
+    [[ -n "${lfs_pushurl}" ]] && git config lfs.pushurl "${lfs_pushurl}"
+  fi
+}
+trap restore_lfs EXIT
+
 git push origin "${new_commit}:ev9"
 
 echo "Sync complete: ev9 now reflects ev9-dev (${dev_sha})"
