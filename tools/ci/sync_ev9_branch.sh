@@ -54,23 +54,50 @@ new_commit=$(git commit-tree "${dev_tree}" -p "${prod_sha}" -m "${commit_msg}")
 
 echo "Pushing ${new_commit} to ev9 (tree ${dev_tree})"
 
-# Temporarily disable LFS pushurl/url (CI uses HTTPS token)
-lfs_url="$(git config --get lfs.url || echo '')"
-lfs_pushurl="$(git config --get lfs.pushurl || echo '')"
-unset_lfs=0
-if [[ -n "${lfs_pushurl}" ]]; then
-  git config --unset lfs.pushurl
-  unset_lfs=1
+# Optional LFS adjustments for CI (skip push/pull to non-HTTPS remotes)
+if [[ "${LFS_SKIP_PUSH:-0}" == "1" ]]; then
+  export GIT_LFS_SKIP_SMUDGE=1
+  git config --global filter.lfs.smudge ""
+  git config --global filter.lfs.clean ""
 fi
+
+lfs_url=$(git config --get lfs.url || echo "")
+lfs_pushurl=$(git config --get lfs.pushurl || echo "")
+
 if [[ -n "${lfs_url}" ]]; then
   git config --unset lfs.url
-  unset_lfs=1
+fi
+if [[ -n "${lfs_pushurl}" ]]; then
+  git config --unset lfs.pushurl
+fi
+
+# Temporarily move .lfsconfig (contains SSH pushurl) if present
+lfs_config_backup=""
+if [[ -f .lfsconfig ]]; then
+  lfs_config_backup=".lfsconfig.ev9sync"
+  mv .lfsconfig "${lfs_config_backup}"
+fi
+
+lfs_was_installed=0
+if [[ "${LFS_SKIP_PUSH:-0}" == "1" ]]; then
+  if git lfs env >/dev/null 2>&1; then
+    lfs_was_installed=1
+    git lfs uninstall --local >/dev/null 2>&1 || true
+  fi
 fi
 
 restore_lfs() {
-  if [[ ${unset_lfs} -eq 1 ]]; then
-    [[ -n "${lfs_url}" ]] && git config lfs.url "${lfs_url}"
-    [[ -n "${lfs_pushurl}" ]] && git config lfs.pushurl "${lfs_pushurl}"
+  if [[ ${lfs_was_installed} -eq 1 ]]; then
+    git lfs install --local >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${lfs_url}" ]]; then
+    git config lfs.url "${lfs_url}"
+  fi
+  if [[ -n "${lfs_pushurl}" ]]; then
+    git config lfs.pushurl "${lfs_pushurl}"
+  fi
+  if [[ -n "${lfs_config_backup}" && -f "${lfs_config_backup}" ]]; then
+    mv "${lfs_config_backup}" .lfsconfig
   fi
 }
 trap restore_lfs EXIT
