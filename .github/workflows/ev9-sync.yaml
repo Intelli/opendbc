@@ -35,5 +35,11 @@ jobs:
           git fetch --no-tags origin "refs/heads/ev9-dev:refs/remotes/origin/ev9-dev" --refmap=""
           git fetch --no-tags origin "refs/heads/ev9:refs/remotes/origin/ev9" --refmap=""
           git reset --hard origin/ev9-dev
-          bash tools/ci/sync_ev9_branch.sh
+          lfs_url=$(git config --get lfs.url || echo "")
+          lfs_pushurl=$(git config --get lfs.pushurl || echo "")
+          git config --unset-all lfs.url || true
+          git config --unset-all lfs.pushurl || true
+          GIT_LFS_SKIP_SMUDGE=1 bash tools/ci/sync_ev9_branch.sh
+          [[ -n "$lfs_url" ]] && git config lfs.url "$lfs_url"
+          [[ -n "$lfs_pushurl" ]] && git config lfs.pushurl "$lfs_pushurl"
 
