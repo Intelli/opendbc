@@ -17,18 +17,56 @@ EXCLUDES=(
   'patches'
 )
 
-if [[ $# -gt 1 ]]; then
-  echo "Usage: $0 [commit|ref]" >&2
+usage() {
+  echo "Usage: $0 [--allow] [commit|ref]" >&2
+  return 1 2>/dev/null
   exit 1
+}
+
+ALLOW_UPSTREAM=0
+POSITIONAL_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --allow)
+      ALLOW_UPSTREAM=1
+      shift
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#POSITIONAL_ARGS[@]} -gt 1 ]]; then
+  usage
 fi
 
-TARGET_REF="${1:-$DEFAULT_REF}"
+if [[ ${#POSITIONAL_ARGS[@]} -gt 0 ]]; then
+  TARGET_REF="${POSITIONAL_ARGS[0]}"
+else
+  TARGET_REF="$DEFAULT_REF"
+fi
 
 git fetch upstream hkg-angle-steering-2025 --prune
 
 if ! git rev-parse --verify "${TARGET_REF}^{commit}" >/dev/null 2>&1; then
   echo "Unable to resolve '${TARGET_REF}' to a commit. Did you fetch the right branch?" >&2
   exit 1
+fi
+
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  if ! git merge-base --is-ancestor "${TARGET_REF}" HEAD; then
+    if [[ ${ALLOW_UPSTREAM} -ne 1 ]]; then
+      echo "Upstream '${TARGET_REF}' contains commits not present in HEAD. Re-run with --allow to continue." >&2
+      return 1 2>/dev/null
+      exit 1
+    fi
+  fi
 fi
 
 OPENDBC_SUBMODULE_PATH="opendbc_repo"
