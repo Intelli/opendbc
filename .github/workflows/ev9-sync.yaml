@@ -4,6 +4,8 @@ on:
   workflow_run:
     workflows:
       - sunnypilot prebuilt action
+    branches:
+      - ev9-dev
     types:
       - completed
   workflow_dispatch:
