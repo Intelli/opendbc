@@ -1,0 +1,50 @@
+name: ev9 branch sync
+
+on:
+  workflow_run:
+    workflows:
+      - sunnypilot prebuilt action
+    branches:
+      - ev9-dev
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: sync ev9-dev to ev9
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Initialize repository
+        run: |
+          set -euo pipefail
+          git init --initial-branch=main .
+          git config remote.origin.fetch ""
+          if git remote get-url origin >/dev/null 2>&1; then
+            git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          else
+            git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+          fi
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run sync script
+        env:
+          SYNC_AUTHOR_NAME: GitHub Actions
+          SYNC_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --filter=blob:none --no-tags origin "refs/heads/ev9-dev:refs/remotes/origin/ev9-dev" --refmap=""
+          git fetch --filter=blob:none --no-tags origin "refs/heads/ev9:refs/remotes/origin/ev9" --refmap=""
+          git reset --hard origin/ev9-dev
+          if [ -f .lfsconfig ]; then
+            mv .lfsconfig .lfsconfig.ev9sync
+          fi
+          GIT_LFS_SKIP_SMUDGE=1 LFS_SKIP_PUSH=1 bash tools/ci/sync_ev9_branch.sh
+          if [ -f .lfsconfig.ev9sync ]; then
+            mv .lfsconfig.ev9sync .lfsconfig
+          fi
+
