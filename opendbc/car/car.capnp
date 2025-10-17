@@ -222,6 +222,7 @@ struct CarState {
   # lock info
   doorOpen @24 :Bool;           # ideally includes all doors
   seatbeltUnlatched @25 :Bool;  # driver seatbelt
+  doorBitfield @78 :DoorBitfield;
 
   # blindspot sensors
   leftBlindspot @33 :Bool;  # Is there something blocking the left lane change
@@ -236,6 +237,13 @@ struct CarState {
     fr @1 :Float32;
     rl @2 :Float32;
     rr @3 :Float32;
+  }
+
+  struct DoorBitfield {
+    driver @0 :Bool;
+    passenger @1 :Bool;
+    rearLeft @2 :Bool;
+    rearRight @3 :Bool;
   }
 
   struct CruiseState {
