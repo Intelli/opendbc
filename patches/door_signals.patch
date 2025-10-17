@@ -1,0 +1,20 @@
+diff --git b/opendbc/car/hyundai/carstate.py a/opendbc/car/hyundai/carstate.py
+index d05ffdea..572e7e09 100644
+--- b/opendbc/car/hyundai/carstate.py
++++ a/opendbc/car/hyundai/carstate.py
+@@ -238,7 +238,14 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
+ 
+     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
+ 
+-    ret.doorOpen = cp.vl["DOORS_SEATBELTS"]["DRIVER_DOOR"] == 1
++    doors_seatbelts = cp.vl["DOORS_SEATBELTS"]
++    door_signals = [
++      "DRIVER_DOOR",
++      "PASSENGER_DOOR",
++      "DRIVER_REAR_DOOR",
++      "PASSENGER_REAR_DOOR",
++    ]
++    ret.doorOpen = any(doors_seatbelts.get(sig, 0) == 1 for sig in door_signals)
+     ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
+ 
+     gear = cp.vl[self.gear_msg_canfd]["GEAR"]
