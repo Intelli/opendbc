@@ -239,10 +239,11 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
     doors_seatbelts = cp.vl["DOORS_SEATBELTS"]
-    ret.doorOpen = doors_seatbelts.get("DRIVER_DOOR", 0) == 1
+    driver_door_open = doors_seatbelts.get("DRIVER_DOOR", 0) == 1
+    ret.doorOpen = driver_door_open
     ret.seatbeltUnlatched = doors_seatbelts.get("DRIVER_SEATBELT", 0) == 0
     door_bitfield = ret.init("doorBitfield")
-    door_bitfield.driver = doors_seatbelts.get("DRIVER_DOOR", 0) == 1
+    door_bitfield.driver = driver_door_open
     door_bitfield.passenger = doors_seatbelts.get("PASSENGER_DOOR", 0) == 1
     door_bitfield.rearLeft = doors_seatbelts.get("DRIVER_REAR_DOOR", 0) == 1
     door_bitfield.rearRight = doors_seatbelts.get("PASSENGER_REAR_DOOR", 0) == 1
