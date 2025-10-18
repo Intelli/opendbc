@@ -239,26 +239,14 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     ret.brakePressed = cp.vl["TCS"]["DriverBraking"] == 1
 
     doors_seatbelts = cp.vl["DOORS_SEATBELTS"]
-    ret.doorOpen = any((
-      doors_seatbelts.get("DRIVER_DOOR", 0) == 1,
-      doors_seatbelts.get("PASSENGER_DOOR", 0) == 1,
-      doors_seatbelts.get("DRIVER_REAR_DOOR", 0) == 1,
-      doors_seatbelts.get("PASSENGER_REAR_DOOR", 0) == 1,
-    ))
-
-    ret.seatbeltUnlatched = any((
-      doors_seatbelts.get("DRIVER_SEATBELT", 0) == 0,
-      doors_seatbelts.get("PASSENGER_SEATBELT", 0) == 0,
-      doors_seatbelts.get("DRIVER_REAR_SEATBELT", 0) == 0,
-      doors_seatbelts.get("PASSENGER_REAR_SEATBELT", 0) == 0,
-    ))
-
-    ret.seatbeltsAllUnlatched = all((
-      doors_seatbelts.get("DRIVER_SEATBELT", 0) == 0,
-      doors_seatbelts.get("PASSENGER_SEATBELT", 0) == 0,
-      doors_seatbelts.get("DRIVER_REAR_SEATBELT", 0) == 0,
-      doors_seatbelts.get("PASSENGER_REAR_SEATBELT", 0) == 0,
-    ))
+    door_signals = [
+      "DRIVER_DOOR",
+      "PASSENGER_DOOR",
+      "DRIVER_REAR_DOOR",
+      "PASSENGER_REAR_DOOR",
+    ]
+    ret.doorOpen = any(doors_seatbelts.get(sig, 0) == 1 for sig in door_signals)
+    ret.seatbeltUnlatched = cp.vl["DOORS_SEATBELTS"]["DRIVER_SEATBELT"] == 0
 
     gear = cp.vl[self.gear_msg_canfd]["GEAR"]
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
