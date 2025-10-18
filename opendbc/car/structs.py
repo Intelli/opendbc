@@ -14,7 +14,6 @@ except ImportError:
   car = capnp.load(os.path.join(BASEDIR, "car.capnp"))
 
 CarState = car.CarState
-DoorBitfield = car.CarState.DoorBitfield
 RadarData = car.RadarData
 CarControl = car.CarControl
 CarParams = car.CarParams
