@@ -222,7 +222,7 @@ struct CarState {
   # lock info
   doorOpen @24 :Bool;           # ideally includes all doors
   seatbeltUnlatched @25 :Bool;  # driver seatbelt
-  seatbeltsAllUnlatched @78 :Bool;
+  seatbeltsAllUnlatched @26 :Bool;
 
   # blindspot sensors
   leftBlindspot @33 :Bool;  # Is there something blocking the left lane change
