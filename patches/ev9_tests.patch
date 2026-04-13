@@ -1,5 +1,5 @@
 diff --git b/opendbc/safety/tests/test_hyundai_canfd.py a/opendbc/safety/tests/test_hyundai_canfd.py
-index 2a5bd800..b79c51ae 100755
+index eec0b7a5..ef321b89 100755
 --- b/opendbc/safety/tests/test_hyundai_canfd.py
 +++ a/opendbc/safety/tests/test_hyundai_canfd.py
 @@ -5,7 +5,7 @@ import numpy as np
@@ -11,7 +11,7 @@ index 2a5bd800..b79c51ae 100755
  from opendbc.car.structs import CarParams
  from opendbc.car.vehicle_model import VehicleModel, calc_slip_factor
  from opendbc.safety.tests.libsafety import libsafety_py
-@@ -139,8 +139,7 @@ class TestHyundaiCanfdTorqueSteering(TestHyundaiCanfdBase, common.DriverTorqueSt
+@@ -138,8 +138,7 @@ class TestHyundaiCanfdTorqueSteering(TestHyundaiCanfdBase, common.DriverTorqueSt
  
  
  class TestHyundaiCanfdAngleSteering(TestHyundaiCanfdBase, common.AngleSteeringSafetyTest):
@@ -41,8 +41,8 @@ index 2a5bd800..b79c51ae 100755
 -
 -        self.assertTrue(self._tx(self._angle_cmd_msg(max_angle, True)), f"{angl} -- {max_angle}")
 -
--        # 1 unit above limit
--        max_angle_raw = round_angle(get_max_angle_vm(speed, self.get_vm(car_name), self.get_baseline_limits()), 3) * sign
+-        # above limit (offset 6 to reliably exceed C float tolerance)
+-        max_angle_raw = round_angle(get_max_angle_vm(speed, self.get_vm(car_name), self.get_baseline_limits()), 6) * sign
 -        max_angle = np.clip(max_angle_raw, -self.STEER_ANGLE_MAX, self.STEER_ANGLE_MAX)
 -        self._tx(self._angle_cmd_msg(max_angle, True))
 -
@@ -136,8 +136,8 @@ index 2a5bd800..b79c51ae 100755
  
    def test_rt_limits(self):
      # TODO: remove and check all safety modes
-@@ -505,6 +512,46 @@ class TestHyundaiCanfdLKASteeringAltEVAngle(TestHyundaiCanfdLKASteeringAltEVBase
-     self.safety.init_tests()
+@@ -562,6 +569,46 @@ class TestHyundaiCanfdLKASteeringAltAngle(TestHyundaiCanfdAngleSteering):
+     pass
  
  
 +class TestHyundaiCanfdLKASteeringAltEVAngleEV9(TestHyundaiCanfdLKASteeringAltEVBase, TestHyundaiCanfdAngleSteering):
@@ -154,11 +154,11 @@ index 2a5bd800..b79c51ae 100755
 +    return limits
 +
 +  def setUp(self):
-+    self.packer = CANPackerPanda("hyundai_canfd_generated")
++    self.packer = CANPackerSafety("hyundai_canfd_generated")
 +    self.safety = libsafety_py.libsafety
 +    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd,
-+                                 HyundaiSafetyFlags.CANFD_LKA_STEERING | HyundaiSafetyFlags.EV_GAS |
-+                                 HyundaiSafetyFlags.CANFD_LKA_STEERING_ALT | HyundaiSafetyFlags.CANFD_ANGLE_STEERING)
++                                 HyundaiSafetyFlags.CANFD_LKA_STEER_MSG | HyundaiSafetyFlags.EV_GAS |
++                                 HyundaiSafetyFlags.CANFD_LKA_STEER_MSG_ALT | HyundaiSafetyFlags.CANFD_ANGLE_STEERING)
 +    self.safety.init_tests()
 +
 +  def test_lateral_accel_limit(self):

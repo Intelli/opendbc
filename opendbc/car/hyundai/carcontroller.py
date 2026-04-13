@@ -28,7 +28,7 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
 MAX_ANGLE_RATE = 5
 ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
-EV9_ANGLE_LIMIT_SPEED_THRESHOLD = 32.0 / 3.6
+EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT = 32.0 / 3.6
 
 
 def get_baseline_safety_cp():
@@ -117,6 +117,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
 
+    self.ev9_angle_limit_speed_threshold = EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT
+    if self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph > 0.0:
+      self.ev9_angle_limit_speed_threshold = self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph / 3.6
+
     self.apply_angle_last = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
@@ -147,7 +151,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       max_lat_accel = self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL
       max_lat_jerk = self.params.ANGLE_LIMITS.MAX_LATERAL_JERK
-      if (self.CP.carFingerprint == CAR.KIA_EV9) and (v_ego_raw <= EV9_ANGLE_LIMIT_SPEED_THRESHOLD):
+      if (self.CP.carFingerprint == CAR.KIA_EV9) and (v_ego_raw <= self.ev9_angle_limit_speed_threshold):
         self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = 4.2
         self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = 4.2
 
