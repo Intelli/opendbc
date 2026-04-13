@@ -95,6 +95,13 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
 
   # Hyundai Custom Longitudinal Tuning
   if CP.brand == 'hyundai':
+    speed_limit_kph = params_dict.get("HkgTuningAngleCustomLimitMaxSpeedKph")
+    if speed_limit_kph is not None:
+      try:
+        CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph = max(0.0, float(speed_limit_kph))
+      except (TypeError, ValueError):
+        pass
+
     hyundai_longitudinal_tuning = int(params_dict.get("HyundaiLongitudinalTuning", 0))
     if hyundai_longitudinal_tuning == LongitudinalTuningType.DYNAMIC:
       CP_SP.flags |= HyundaiFlagsSP.LONG_TUNING_DYNAMIC.value
