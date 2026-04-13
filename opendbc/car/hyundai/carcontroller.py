@@ -1,19 +1,9 @@
-import math
 import numpy as np
-from opendbc.car.carlog import carlog
 from opendbc.car.vehicle_model import VehicleModel
-
-try:
-  # TODO-SP: We shouldn't really import params from here, but it's the easiest way to get the params for
-  #  live tuning temporarily while we understand the angle steering better
-  from openpilot.common.params import Params
-  PARAMS_AVAILABLE = True
-except ImportError:
-  carlog.warning("Unable to import Params from openpilot.common.params.")
-  PARAMS_AVAILABLE = False
+from opendbc.car.common.filter_simple import FirstOrderFilter
 
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
+from opendbc.car import Bus, DT_CTRL, make_tester_present_msg, structs, rate_limit
 from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_avoidance, apply_steer_angle_limits_vm
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
@@ -27,8 +17,6 @@ from opendbc.sunnypilot.car.hyundai.longitudinal.controller import LongitudinalC
 from opendbc.sunnypilot.car.hyundai.lead_data_ext import LeadDataCarController
 from opendbc.sunnypilot.car.hyundai.mads import MadsCarController
 
-from opendbc.car.hyundai.torque_reduction_gain import TorqueReductionGainController
-
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 LongCtrlState = structs.CarControl.Actuators.LongControlState
 
@@ -40,6 +28,7 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 
 MAX_ANGLE_RATE = 5
 ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
+EV9_ANGLE_LIMIT_SPEED_THRESHOLD = 32.0 / 3.6
 
 
 def get_baseline_safety_cp():
@@ -47,51 +36,21 @@ def get_baseline_safety_cp():
   return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
 
 
-def calculate_angle_torque_reduction_gain(params, CS, apply_torque_last, target_torque_reduction_gain):
-  """ Calculate the angle torque reduction gain based on the current steering state. """
-  target_gain = max(target_torque_reduction_gain, params.ANGLE_ACTIVE_TORQUE_REDUCTION_GAIN)
+def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain):
+  if lat_active:
+    ceiling = np.interp(v_ego, [0.5, 1.5], [1.0, 0.85])
+    shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
+    floor = np.interp(v_ego, [2, 22], [0.1, 0.3])
+    bp1 = np.interp(v_ego, [2, 11], [75, 125])
+    bp2 = np.interp(v_ego, [2, 11], [125, 150])
+    bp3 = np.interp(v_ego, [2, 11], [175, 275])
+    bp4 = np.interp(v_ego, [2, 22], [400, 700])
+    target = np.interp(abs(steering_torque), [bp1, bp2, bp3, bp4], [ceiling, shelf, shelf, floor])
 
-  driver_torque = abs(CS.out.steeringTorque)
-  alpha = np.interp(driver_torque, [params.STEER_THRESHOLD * .8, params.STEER_THRESHOLD * 2], [0.02, 0.1])
-
-  if CS.out.steeringPressed:
-    scale = 100
-    clamped_torque_gain = max(apply_torque_last, params.ANGLE_ACTIVE_TORQUE_REDUCTION_GAIN)
-    target_gain = params.ANGLE_MIN_TORQUE_REDUCTION_GAIN + (clamped_torque_gain - params.ANGLE_MIN_TORQUE_REDUCTION_GAIN) \
-                  * math.exp(-(driver_torque - params.STEER_THRESHOLD) / scale)
-
-  # Smooth transition (like a rubber band returning)
-  new_gain = apply_torque_last + alpha * (target_gain - apply_torque_last)
-
-  return float(np.clip(new_gain, params.ANGLE_MIN_TORQUE_REDUCTION_GAIN, params.ANGLE_MAX_TORQUE_REDUCTION_GAIN))
-
-
-def sp_smooth_angle(v_ego_raw: float, apply_angle: float, apply_angle_last: float) -> float:
-  """
-  Smooth the steering angle change based on vehicle speed and an optional smoothing offset.
-
-  This function helps prevent abrupt steering changes by blending the new desired angle (`apply_angle`)
-  with the previously applied angle (`apply_angle_last`). The blend factor (alpha) is dynamically calculated
-  based on the vehicle's current speed using a predefined lookup table.
-
-  Behavior:
-    - At low speeds, the smoothing is strong, keeping the steering more stable.
-    - At higher speeds, the smoothing is relaxed, allowing quicker responses.
-    - If the angle change is negligible (≤ 0.1 deg), smoothing is skipped for responsiveness.
-
-  Parameters:
-    v_ego_raw (float): Raw vehicle speed in m/s.
-    apply_angle (float): New target steering angle in degrees.
-    apply_angle_last (float): Previously applied steering angle in degrees.
-
-  Returns:
-    float: Smoothed steering angle.
-  """
-  if abs(apply_angle - apply_angle_last) > 0.1:
-    adjusted_alpha = np.interp(v_ego_raw, CarControllerParams.SMOOTHING_ANGLE_VEGO_MATRIX, CarControllerParams.SMOOTHING_ANGLE_ALPHA_MATRIX)
-    adjusted_alpha_limited = float(min(float(adjusted_alpha), 1.))  # Limit the smoothing factor to 1 if adjusted_alpha is greater than 1
-    return (apply_angle * adjusted_alpha_limited) + (apply_angle_last * (1 - adjusted_alpha_limited))
-  return apply_angle
+  else:
+    target = 0.0
+  gain = rate_limit(target, last_gain, -0.014, 0.004)
+  return round(gain / 0.004) * 0.004
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -146,10 +105,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.params = CarControllerParams(CP)
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.angle_limit_counter = 0
+    self.angle_filter = FirstOrderFilter(0.0, 0.2, DT_CTRL)
 
     # Vehicle model used for lateral limiting
     self.VM = VehicleModel(CP)
     self.BASELINE_VM = VehicleModel(get_baseline_safety_cp())
+    self.apply_angle_last = 0
 
     self.accel_last = 0
     self.apply_torque_last = 0
@@ -157,47 +118,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.last_button_frame = 0
 
     self.apply_angle_last = 0
-    self.angle_torque_reduction_gain = 0
-
-    # For future parametrization / tuning
-    self.angle_enable_smoothing_factor = True
-    self.angle_limit_speed_threshold = 32.0 / 3.6
-
-    self._params = Params() if PARAMS_AVAILABLE else None
-    if PARAMS_AVAILABLE:
-      self.params.ANGLE_MIN_TORQUE_REDUCTION_GAIN = parse_tq_rdc_gain(
-        self._params.get("HkgTuningAngleMinTorqueReductionGain")) or self.params.ANGLE_MIN_TORQUE_REDUCTION_GAIN
-
-      self.params.ANGLE_MAX_TORQUE_REDUCTION_GAIN = parse_tq_rdc_gain(
-        self._params.get("HkgTuningAngleMaxTorqueReductionGain")) or self.params.ANGLE_MAX_TORQUE_REDUCTION_GAIN
-
-      self.params.ANGLE_ACTIVE_TORQUE_REDUCTION_GAIN = parse_tq_rdc_gain(
-        self._params.get("HkgTuningAngleActiveTorqueReductionGain")) or self.params.ANGLE_ACTIVE_TORQUE_REDUCTION_GAIN
-
-      self.params.ANGLE_TORQUE_OVERRIDE_CYCLES = int(self._params.get("HkgTuningOverridingCycles") or self.params.ANGLE_TORQUE_OVERRIDE_CYCLES)
-      self.angle_enable_smoothing_factor = self._params.get_bool("EnableHkgTuningAngleSmoothingFactor")
-
-      speed_threshold = self._params.get("HkgTuningAngleCustomLimitMaxSpeedKph", return_default=True)
-      if speed_threshold is None:
-        speed_threshold_mps = 32.0 / 3.6
-      else:
-        speed_threshold_mps = float(speed_threshold) / 3.6
-      self.angle_limit_speed_threshold = max(0.0, speed_threshold_mps)
-
-    self.angle_torque_reduction_gain_controller = TorqueReductionGainController(
-      angle_threshold=.3,
-      debounce_time=.1,
-      min_gain=self.params.ANGLE_ACTIVE_TORQUE_REDUCTION_GAIN,
-      max_gain=self.params.ANGLE_MAX_TORQUE_REDUCTION_GAIN,
-      ramp_up_rate=self.params.ANGLE_RAMP_UP_TORQUE_REDUCTION_RATE,
-      ramp_down_rate=self.params.ANGLE_RAMP_DOWN_TORQUE_REDUCTION_RATE
-    )
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
     MadsCarController.update(self, self.CP, CC, CC_SP, self.frame)
-    if self.frame % 2 == 0:
+    if self.frame % 5 == 0:
       LongitudinalController.update(self, CC, CS)
 
     actuators = CC.actuators
@@ -214,14 +140,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # angle control
     else:
       v_ego_raw = CS.out.vEgoRaw
-      desired_angle = np.clip(actuators.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX)
+      desired_angle = float(np.clip(actuators.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 
-      if self.angle_enable_smoothing_factor and abs(v_ego_raw) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
-        desired_angle = sp_smooth_angle(v_ego_raw, desired_angle, self.apply_angle_last)
+      self.angle_filter.update_alpha(float(np.interp(CS.out.vEgo, [5, 10, 20], [0.2, 0.1, 0.0])))
+      desired_angle = self.angle_filter.update(desired_angle)
 
       max_lat_accel = self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL
       max_lat_jerk = self.params.ANGLE_LIMITS.MAX_LATERAL_JERK
-      if (self.CP.carFingerprint == CAR.KIA_EV9) and (v_ego_raw <= self.angle_limit_speed_threshold):
+      if (self.CP.carFingerprint == CAR.KIA_EV9) and (v_ego_raw <= EV9_ANGLE_LIMIT_SPEED_THRESHOLD):
         self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = 4.2
         self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = 4.2
 
@@ -235,17 +161,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
 
-      # Use saturation-based torque reduction gain
-      target_torque_reduction_gain = self.angle_torque_reduction_gain_controller.update(
-        last_requested_angle=self.apply_angle_last,
-        actual_angle=CS.out.steeringAngleDeg,
-        lat_active=CC.latActive
-      )
-
-      # This method ensures that the torque gives up when overriding and controls the ramp rate to avoid feeling jittery.
-      apply_torque = calculate_angle_torque_reduction_gain(self.params, CS, self.apply_torque_last, target_torque_reduction_gain)
-
-      # apply_steer_req is True when we are actively attempting to steer and under the angle limit. Otherwise the user is overriding.
+      apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive, self.apply_torque_last)
       apply_steer_req = CC.latActive and apply_torque != 0
 
       # Failsafe if we detected we'd violate safety
@@ -257,12 +173,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # After we've used the last angle wherever we needed it, we now update it.
       self.apply_angle_last = apply_angle
 
+      if not CC.latActive:
+        self.apply_angle_last = float(np.clip(CS.out.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
+        self.angle_filter.x = self.apply_angle_last
+
     if not CC.latActive:
       apply_torque = 0
-
-    # Hold torque with induced temporary fault when cutting the actuation bit
-    # FIXME: we don't use this with CAN FD?
-    torque_fault = CC.latActive and not apply_steer_req
 
     self.apply_torque_last = apply_torque
 
@@ -280,12 +196,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
             self.CP.openpilotLongitudinalControl:
       # for longitudinal control, either radar or ADAS driving ECU
       addr, bus = 0x7d0, self.CAN.ECAN if self.CP.flags & HyundaiFlags.CANFD else 0
-      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING.value:
+      if self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG.value:
         addr, bus = 0x730, self.CAN.ECAN
       can_sends.append(make_tester_present_msg(addr, bus, suppress_response=True))
 
       # for blinkers
-      if self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
+      if self.CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
         can_sends.append(make_tester_present_msg(0x7b1, self.CAN.ECAN, suppress_response=True))
 
     # *** CAN/CAN FD specific ***
@@ -293,6 +209,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       can_sends.extend(self.create_canfd_msgs(apply_steer_req, apply_torque, set_speed_in_units, accel,
                                               stopping, hud_control, CS, CC))
     else:
+      # Hold torque with induced temporary fault when cutting the actuation bit
+      # FIXME: we don't use this with CAN FD?
+      torque_fault = CC.latActive and not apply_steer_req
+
       can_sends.extend(self.create_can_msgs(apply_steer_req, apply_torque, torque_fault, set_speed_in_units, accel,
                                             stopping, hud_control, actuators, CS, CC))
 
@@ -359,7 +279,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
   def create_canfd_msgs(self, apply_steer_req, apply_torque, set_speed_in_units, accel, stopping, hud_control, CS, CC):
     can_sends = []
 
-    lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING
+    lka_steering = self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
     # steering control
@@ -369,14 +289,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     if self.frame % 5 == 0 and lka_steering:
       can_sends.append(hyundaicanfd.create_suppress_lfa(self.packer, self.CAN, CS.lfa_block_msg,
-                                                        self.CP.flags & HyundaiFlags.CANFD_LKA_STEERING_ALT))
+                                                        self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT))
 
     # LFA and HDA icons
     if self.frame % 5 == 0 and (not lka_steering or lka_steering_long):
       can_sends.append(hyundaicanfd.create_lfahda_cluster(self.packer, self.CAN, CC.enabled, self.lfa_icon))
 
     # blinkers
-    if lka_steering and self.CP.flags & HyundaiFlags.ENABLE_BLINKERS:
+    if lka_steering and self.CP.flags & HyundaiFlags.CANFD_ENABLE_BLINKERS:
       can_sends.extend(hyundaicanfd.create_spas_messages(self.packer, self.CAN, CC.leftBlinker, CC.rightBlinker))
 
     if self.CP.openpilotLongitudinalControl:
