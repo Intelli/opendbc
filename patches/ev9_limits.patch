@@ -1,49 +1,76 @@
 diff --git b/opendbc/car/hyundai/carcontroller.py a/opendbc/car/hyundai/carcontroller.py
-index 82033b17..0910edf5 100644
+index 3f5ec13a..1928f257 100644
 --- b/opendbc/car/hyundai/carcontroller.py
 +++ a/opendbc/car/hyundai/carcontroller.py
-@@ -158,6 +158,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -28,6 +28,7 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
  
-     # For future parametrization / tuning
-     self.angle_enable_smoothing_factor = True
-+    self.angle_limit_speed_threshold = 32.0 / 3.6
+ MAX_ANGLE_RATE = 5
+ ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
++EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT = 32.0 / 3.6
  
-     self._params = Params() if PARAMS_AVAILABLE else None
-     if PARAMS_AVAILABLE:
-@@ -173,6 +174,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
-       self.params.ANGLE_TORQUE_OVERRIDE_CYCLES = int(self._params.get("HkgTuningOverridingCycles") or self.params.ANGLE_TORQUE_OVERRIDE_CYCLES)
-       self.angle_enable_smoothing_factor = self._params.get_bool("EnableHkgTuningAngleSmoothingFactor")
  
-+      speed_threshold = self._params.get("HkgTuningAngleCustomLimitMaxSpeedKph", return_default=True)
-+      if speed_threshold is None:
-+        speed_threshold_mps = 32.0 / 3.6
-+      else:
-+        speed_threshold_mps = float(speed_threshold) / 3.6
-+      self.angle_limit_speed_threshold = max(0.0, speed_threshold_mps)
+ def get_baseline_safety_cp():
+@@ -116,6 +117,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+     self.car_fingerprint = CP.carFingerprint
+     self.last_button_frame = 0
+ 
++    self.ev9_angle_limit_speed_threshold = EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT
++    if self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph > 0.0:
++      self.ev9_angle_limit_speed_threshold = self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph / 3.6
 +
-     self.angle_torque_reduction_gain_controller = TorqueReductionGainController(
-       angle_threshold=.3,
-       debounce_time=.1,
-@@ -208,6 +216,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
-       if self.angle_enable_smoothing_factor and abs(v_ego_raw) < CarControllerParams.SMOOTHING_ANGLE_MAX_VEGO:
-         desired_angle = sp_smooth_angle(v_ego_raw, desired_angle, self.apply_angle_last)
+     self.apply_angle_last = 0
+ 
+   def update(self, CC, CC_SP, CS, now_nanos):
+@@ -144,6 +149,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+       self.angle_filter.update_alpha(float(np.interp(CS.out.vEgo, [5, 10, 20], [0.2, 0.1, 0.0])))
+       desired_angle = self.angle_filter.update(desired_angle)
  
 +      max_lat_accel = self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL
 +      max_lat_jerk = self.params.ANGLE_LIMITS.MAX_LATERAL_JERK
-+      if (self.CP.carFingerprint == CAR.KIA_EV9) and (v_ego_raw <= self.angle_limit_speed_threshold):
++      if (self.CP.carFingerprint == CAR.KIA_EV9) and (v_ego_raw <= self.ev9_angle_limit_speed_threshold):
 +        self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = 4.2
 +        self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = 4.2
 +
        apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
  
        # if we are not the baseline model, we use the baseline model for further limits to prevent a panda block since it is hardcoded for baseline model.
-@@ -215,6 +229,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -151,6 +162,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
          apply_angle = apply_steer_angle_limits_vm(apply_angle or desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive,
                                                    self.params, self.BASELINE_VM)
  
 +      self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
 +      self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
 +
-       # Use saturation-based torque reduction gain
-       target_torque_reduction_gain = self.angle_torque_reduction_gain_controller.update(
-         last_requested_angle=self.apply_angle_last,
+       apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive, self.apply_torque_last)
+       apply_steer_req = CC.latActive and apply_torque != 0
+ 
+diff --git b/opendbc/car/structs.py a/opendbc/car/structs.py
+index 7fd76233..5ccd5a05 100644
+--- b/opendbc/car/structs.py
++++ a/opendbc/car/structs.py
+@@ -66,6 +66,7 @@ class CarParamsSP:
+   pcmCruiseSpeed: bool = auto_field()
+   intelligentCruiseButtonManagementAvailable: bool = auto_field()
+   enableGasInterceptor: bool = auto_field()
++  hkgTuningAngleCustomLimitMaxSpeedKph: float = auto_field()
+ 
+   neuralNetworkLateralControl: 'CarParamsSP.NeuralNetworkLateralControl' = field(default_factory=lambda: CarParamsSP.NeuralNetworkLateralControl())
+ 
+diff --git b/opendbc/sunnypilot/car/interfaces.py a/opendbc/sunnypilot/car/interfaces.py
+index 623ad0cc..ee76f277 100644
+--- b/opendbc/sunnypilot/car/interfaces.py
++++ a/opendbc/sunnypilot/car/interfaces.py
+@@ -95,6 +95,13 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
+ 
+   # Hyundai Custom Longitudinal Tuning
+   if CP.brand == 'hyundai':
++    speed_limit_kph = params_dict.get("HkgTuningAngleCustomLimitMaxSpeedKph")
++    if speed_limit_kph is not None:
++      try:
++        CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph = max(0.0, float(speed_limit_kph))
++      except (TypeError, ValueError):
++        pass
++
+     hyundai_longitudinal_tuning = int(params_dict.get("HyundaiLongitudinalTuning", 0))
+     if hyundai_longitudinal_tuning == LongitudinalTuningType.DYNAMIC:
+       CP_SP.flags |= HyundaiFlagsSP.LONG_TUNING_DYNAMIC.value
