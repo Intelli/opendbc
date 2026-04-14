@@ -95,6 +95,15 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
 
   # Hyundai Custom Longitudinal Tuning
   if CP.brand == 'hyundai':
+    # Steering override effort scaling in percent: 100 keeps stock behavior, 10 minimizes assist during manual override.
+    CP_SP.hkgTuningAngleOverrideEffortPercent = 10.0
+    override_effort_percent = params_dict.get("HkgTuningAngleOverrideEffortPercent")
+    if override_effort_percent is not None:
+      try:
+        CP_SP.hkgTuningAngleOverrideEffortPercent = min(100.0, max(10.0, float(override_effort_percent)))
+      except (TypeError, ValueError):
+        pass
+
     speed_limit_kph = params_dict.get("HkgTuningAngleCustomLimitMaxSpeedKph")
     if speed_limit_kph is not None:
       try:
