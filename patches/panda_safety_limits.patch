@@ -1,8 +1,8 @@
 diff --git b/opendbc/safety/lateral.h a/opendbc/safety/lateral.h
-index ca815cef..46752bcb 100644
+index ca815cef..6f4109b0 100644
 --- b/opendbc/safety/lateral.h
 +++ a/opendbc/safety/lateral.h
-@@ -299,10 +299,12 @@ bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, co
+@@ -299,12 +299,13 @@ bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, co
    // This check uses a simple vehicle model to allow for constant lateral acceleration and jerk limits across all speeds.
    // TODO: remove the inaccurate breakpoint angle limiting function above and always use this one
  
@@ -16,4 +16,7 @@ index ca815cef..46752bcb 100644
 -  static const float MAX_LATERAL_JERK = 3.0 + (EARTH_G * AVERAGE_ROAD_ROLL);  // ~3.6 m/s^3
 +  const float MAX_LATERAL_JERK = use_high_limits ? 4.2F : (3.0F + (EARTH_G * AVERAGE_ROAD_ROLL));
  
-  const float curvature_factor = get_curvature_factor(fudged_speed, params);
+-  const float fudged_speed = SAFETY_MAX((vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.0, 1.0);
+   const float curvature_factor = get_curvature_factor(fudged_speed, params);
+ 
+   bool violation = false;
