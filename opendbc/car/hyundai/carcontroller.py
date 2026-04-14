@@ -29,6 +29,9 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
 MAX_ANGLE_RATE = 5
 ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
 EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT = 32.0 / 3.6
+ANGLE_OVERRIDE_EFFORT_MIN_PERCENT = 10.0
+ANGLE_OVERRIDE_EFFORT_MAX_PERCENT = 100.0
+ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT = 10.0
 
 
 def get_baseline_safety_cp():
@@ -36,7 +39,7 @@ def get_baseline_safety_cp():
   return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
 
 
-def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain):
+def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_pressed, override_effort_scale, last_gain):
   if lat_active:
     ceiling = np.interp(v_ego, [0.5, 1.5], [1.0, 0.85])
     shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
@@ -49,8 +52,17 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain)
 
   else:
     target = 0.0
-  gain = rate_limit(target, last_gain, -0.014, 0.004)
-  return round(gain / 0.004) * 0.004
+  gain = round(rate_limit(target, last_gain, -0.014, 0.004) / 0.004) * 0.004
+
+  # Manual steering override effort tuning:
+  # scale down torque reduction gain only while the driver is actively overriding.
+  if lat_active and steering_pressed:
+    override_effort_scale = float(np.clip(override_effort_scale,
+                                          ANGLE_OVERRIDE_EFFORT_MIN_PERCENT / 100.0,
+                                          ANGLE_OVERRIDE_EFFORT_MAX_PERCENT / 100.0))
+    gain = round((gain * override_effort_scale) / 0.004) * 0.004
+
+  return float(np.clip(gain, 0.0, 1.0))
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -121,6 +133,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph > 0.0:
       self.ev9_angle_limit_speed_threshold = self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph / 3.6
 
+    override_effort_percent = ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT
+    if self.CP_SP.hkgTuningAngleOverrideEffortPercent > 0.0:
+      override_effort_percent = float(np.clip(self.CP_SP.hkgTuningAngleOverrideEffortPercent,
+                                              ANGLE_OVERRIDE_EFFORT_MIN_PERCENT,
+                                              ANGLE_OVERRIDE_EFFORT_MAX_PERCENT))
+    self.angle_override_effort_scale = override_effort_percent / 100.0
+
     self.apply_angle_last = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
@@ -165,7 +184,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
 
-      apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive, self.apply_torque_last)
+      apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
+                                                   CS.out.steeringPressed, self.angle_override_effort_scale, self.apply_torque_last)
       apply_steer_req = CC.latActive and apply_torque != 0
 
       # Failsafe if we detected we'd violate safety
