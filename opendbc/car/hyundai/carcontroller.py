@@ -32,6 +32,7 @@ EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT = 32.0 / 3.6
 ANGLE_OVERRIDE_EFFORT_MIN_PERCENT = 10.0
 ANGLE_OVERRIDE_EFFORT_MAX_PERCENT = 100.0
 ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT = 10.0
+ANGLE_OVERRIDE_GAIN_MIN_FLOOR = 0.10
 
 
 def get_baseline_safety_cp():
@@ -61,6 +62,9 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_p
                                           ANGLE_OVERRIDE_EFFORT_MIN_PERCENT / 100.0,
                                           ANGLE_OVERRIDE_EFFORT_MAX_PERCENT / 100.0))
     gain = round((gain * override_effort_scale) / 0.004) * 0.004
+    # Keep reduction gain above a minimum floor to avoid EPS temporary faults
+    # from near-zero ACI reduction gain while angle control stays active.
+    gain = max(gain, ANGLE_OVERRIDE_GAIN_MIN_FLOOR)
 
   return float(np.clip(gain, 0.0, 1.0))
 
@@ -186,7 +190,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
                                                    CS.out.steeringPressed, self.angle_override_effort_scale, self.apply_torque_last)
-      apply_steer_req = CC.latActive and apply_torque != 0
+      # For angle steering, keep angle-control active state aligned with lateral activity
+      # rather than reduction-gain magnitude.
+      apply_steer_req = CC.latActive
 
       # Failsafe if we detected we'd violate safety
       if apply_angle is None:
