@@ -40,7 +40,7 @@ def get_baseline_safety_cp():
   return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
 
 
-def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_pressed, override_effort_scale, last_gain):
+def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_pressed, override_effort_scale, last_base_gain):
   if lat_active:
     ceiling = np.interp(v_ego, [0.5, 1.5], [1.0, 0.85])
     shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
@@ -53,7 +53,8 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_p
 
   else:
     target = 0.0
-  gain = round(rate_limit(target, last_gain, -0.014, 0.004) / 0.004) * 0.004
+  base_gain = round(rate_limit(target, last_base_gain, -0.014, 0.004) / 0.004) * 0.004
+  gain = base_gain
 
   # Manual steering override effort tuning:
   # scale down torque reduction gain only while the driver is actively overriding.
@@ -66,7 +67,7 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_p
     # from near-zero ACI reduction gain while angle control stays active.
     gain = max(gain, ANGLE_OVERRIDE_GAIN_MIN_FLOOR)
 
-  return float(np.clip(gain, 0.0, 1.0))
+  return float(np.clip(base_gain, 0.0, 1.0)), float(np.clip(gain, 0.0, 1.0))
 
 
 def process_hud_alert(enabled, fingerprint, hud_control):
@@ -129,6 +130,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.apply_angle_last = 0
 
     self.accel_last = 0
+    self.apply_torque_base_last = 0
     self.apply_torque_last = 0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
@@ -155,6 +157,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     actuators = CC.actuators
     hud_control = CC.hudControl
+    apply_torque_base = self.apply_torque_base_last
 
     # steering torque
     if not self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
@@ -163,6 +166,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                                          MAX_ANGLE_CONSECUTIVE_FRAMES)
       new_torque = int(round(actuators.torque * self.params.STEER_MAX))
       apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
+      apply_torque_base = 0
 
     # angle control
     else:
@@ -188,14 +192,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
 
-      apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
-                                                   CS.out.steeringPressed, self.angle_override_effort_scale, self.apply_torque_last)
+      apply_torque_base, apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
+                                                                       CS.out.steeringPressed, self.angle_override_effort_scale, self.apply_torque_base_last)
       # For angle steering, keep angle-control active state aligned with lateral activity
       # rather than reduction-gain magnitude.
       apply_steer_req = CC.latActive
 
       # Failsafe if we detected we'd violate safety
       if apply_angle is None:
+        apply_torque_base = 0
         apply_torque = 0
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
@@ -208,8 +213,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.angle_filter.x = self.apply_angle_last
 
     if not CC.latActive:
+      apply_torque_base = 0
       apply_torque = 0
 
+    self.apply_torque_base_last = apply_torque_base
     self.apply_torque_last = apply_torque
 
     # accel + longitudinal
