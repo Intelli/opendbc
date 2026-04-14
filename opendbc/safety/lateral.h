@@ -306,7 +306,6 @@ bool steer_angle_cmd_checks_vm(int desired_angle, bool steer_control_enabled, co
   // Lower than ISO 11270 lateral jerk limit, which is 5.0 m/s^3
   const float MAX_LATERAL_JERK = use_high_limits ? 4.2F : (3.0F + (EARTH_G * AVERAGE_ROAD_ROLL));
 
-  const float fudged_speed = SAFETY_MAX((vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.0, 1.0);
   const float curvature_factor = get_curvature_factor(fudged_speed, params);
 
   bool violation = false;

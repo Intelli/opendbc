@@ -16,5 +16,4 @@ index ca815cef..46752bcb 100644
 -  static const float MAX_LATERAL_JERK = 3.0 + (EARTH_G * AVERAGE_ROAD_ROLL);  // ~3.6 m/s^3
 +  const float MAX_LATERAL_JERK = use_high_limits ? 4.2F : (3.0F + (EARTH_G * AVERAGE_ROAD_ROLL));
  
-   const float fudged_speed = SAFETY_MAX((vehicle_speed.min / VEHICLE_SPEED_FACTOR) - 1.0, 1.0);
-   const float curvature_factor = get_curvature_factor(fudged_speed, params);
+  const float curvature_factor = get_curvature_factor(fudged_speed, params);
