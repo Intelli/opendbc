@@ -1,8 +1,8 @@
 diff --git b/opendbc/car/hyundai/carcontroller.py a/opendbc/car/hyundai/carcontroller.py
-index 1928f257..0b5e017e 100644
+index 1928f257..64795e8d 100644
 --- b/opendbc/car/hyundai/carcontroller.py
 +++ a/opendbc/car/hyundai/carcontroller.py
-@@ -29,6 +29,10 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
+@@ -29,6 +29,11 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
  MAX_ANGLE_RATE = 5
  ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
  EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT = 32.0 / 3.6
@@ -10,10 +10,11 @@ index 1928f257..0b5e017e 100644
 +ANGLE_OVERRIDE_EFFORT_MAX_PERCENT = 100.0
 +ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT = 10.0
 +ANGLE_OVERRIDE_GAIN_MIN_FLOOR = 0.10
++ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS = 40.0
  
  
  def get_baseline_safety_cp():
-@@ -36,7 +40,7 @@ def get_baseline_safety_cp():
+@@ -36,7 +41,7 @@ def get_baseline_safety_cp():
    return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
  
  
@@ -22,7 +23,7 @@ index 1928f257..0b5e017e 100644
    if lat_active:
      ceiling = np.interp(v_ego, [0.5, 1.5], [1.0, 0.85])
      shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
-@@ -49,8 +53,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain)
+@@ -49,8 +54,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain)
  
    else:
      target = 0.0
@@ -46,7 +47,7 @@ index 1928f257..0b5e017e 100644
  
  
  def process_hud_alert(enabled, fingerprint, hud_control):
-@@ -113,6 +130,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -113,6 +131,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
      self.apply_angle_last = 0
  
      self.accel_last = 0
@@ -54,7 +55,7 @@ index 1928f257..0b5e017e 100644
      self.apply_torque_last = 0
      self.car_fingerprint = CP.carFingerprint
      self.last_button_frame = 0
-@@ -121,6 +139,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -121,8 +140,32 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
      if self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph > 0.0:
        self.ev9_angle_limit_speed_threshold = self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph / 3.6
  
@@ -64,11 +65,30 @@ index 1928f257..0b5e017e 100644
 +                                              ANGLE_OVERRIDE_EFFORT_MIN_PERCENT,
 +                                              ANGLE_OVERRIDE_EFFORT_MAX_PERCENT))
 +    self.angle_override_effort_scale = override_effort_percent / 100.0
++    self.override_active = False
 +
      self.apply_angle_last = 0
  
++  def _get_override_active(self, steering_torque, steering_pressed):
++    # Keep stock behavior when override effort tuning is effectively disabled.
++    if self.angle_override_effort_scale >= 0.999:
++      return steering_pressed
++
++    torque_abs = abs(steering_torque)
++    enter_threshold = float(self.params.STEER_THRESHOLD)
++    exit_threshold = max(0.0, enter_threshold - ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS)
++
++    if self.override_active:
++      self.override_active = torque_abs >= exit_threshold
++    else:
++      self.override_active = torque_abs >= enter_threshold
++
++    return self.override_active
++
    def update(self, CC, CC_SP, CS, now_nanos):
-@@ -132,6 +157,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+     EsccCarController.update(self, CS)
+     LeadDataCarController.update(self, CC_SP)
+@@ -132,6 +175,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
  
      actuators = CC.actuators
      hud_control = CC.hudControl
@@ -76,7 +96,7 @@ index 1928f257..0b5e017e 100644
  
      # steering torque
      if not self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-@@ -140,6 +166,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -140,6 +184,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                                           MAX_ANGLE_CONSECUTIVE_FRAMES)
        new_torque = int(round(actuators.torque * self.params.STEER_MAX))
        apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
@@ -84,14 +104,15 @@ index 1928f257..0b5e017e 100644
  
      # angle control
      else:
-@@ -165,11 +192,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -165,11 +210,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
        self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
        self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
  
 -      apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive, self.apply_torque_last)
 -      apply_steer_req = CC.latActive and apply_torque != 0
++      override_active = self._get_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
 +      apply_torque_base, apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
-+                                                                       CS.out.steeringPressed, self.angle_override_effort_scale, self.apply_torque_base_last)
++                                                                       override_active, self.angle_override_effort_scale, self.apply_torque_base_last)
 +      # For angle steering, keep angle-control active state aligned with lateral activity
 +      # rather than reduction-gain magnitude.
 +      apply_steer_req = CC.latActive
@@ -102,12 +123,13 @@ index 1928f257..0b5e017e 100644
          apply_torque = 0
          apply_angle = CS.out.steeringAngleDeg
          apply_steer_req = False
-@@ -182,8 +213,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -182,8 +232,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
          self.angle_filter.x = self.apply_angle_last
  
      if not CC.latActive:
 +      apply_torque_base = 0
        apply_torque = 0
++      self.override_active = False
  
 +    self.apply_torque_base_last = apply_torque_base
      self.apply_torque_last = apply_torque
