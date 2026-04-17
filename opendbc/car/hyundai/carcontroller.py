@@ -33,6 +33,7 @@ ANGLE_OVERRIDE_EFFORT_MIN_PERCENT = 10.0
 ANGLE_OVERRIDE_EFFORT_MAX_PERCENT = 100.0
 ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT = 10.0
 ANGLE_OVERRIDE_GAIN_MIN_FLOOR = 0.10
+ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS = 40.0
 
 
 def get_baseline_safety_cp():
@@ -145,8 +146,25 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                               ANGLE_OVERRIDE_EFFORT_MIN_PERCENT,
                                               ANGLE_OVERRIDE_EFFORT_MAX_PERCENT))
     self.angle_override_effort_scale = override_effort_percent / 100.0
+    self.override_active = False
 
     self.apply_angle_last = 0
+
+  def _get_override_active(self, steering_torque, steering_pressed):
+    # Keep stock behavior when override effort tuning is effectively disabled.
+    if self.angle_override_effort_scale >= 0.999:
+      return steering_pressed
+
+    torque_abs = abs(steering_torque)
+    enter_threshold = float(self.params.STEER_THRESHOLD)
+    exit_threshold = max(0.0, enter_threshold - ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS)
+
+    if self.override_active:
+      self.override_active = torque_abs >= exit_threshold
+    else:
+      self.override_active = torque_abs >= enter_threshold
+
+    return self.override_active
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -192,8 +210,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
 
+      override_active = self._get_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
       apply_torque_base, apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
-                                                                       CS.out.steeringPressed, self.angle_override_effort_scale, self.apply_torque_base_last)
+                                                                       override_active, self.angle_override_effort_scale, self.apply_torque_base_last)
       # For angle steering, keep angle-control active state aligned with lateral activity
       # rather than reduction-gain magnitude.
       apply_steer_req = CC.latActive
@@ -215,6 +234,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if not CC.latActive:
       apply_torque_base = 0
       apply_torque = 0
+      self.override_active = False
 
     self.apply_torque_base_last = apply_torque_base
     self.apply_torque_last = apply_torque
