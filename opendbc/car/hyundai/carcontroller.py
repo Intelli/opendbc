@@ -216,7 +216,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
 
-      torque_override_active = self._get_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
+      torque_override_active = False
+      if self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_STOCK:
+        torque_override_active = self._get_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
+      else:
+        self.override_active = False
       override_active = self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_STOCK and torque_override_active
       apply_torque_base, apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
                                                                        override_active, self.angle_override_effort_scale, self.apply_torque_base_last)
@@ -238,7 +242,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         manual_override_detected = CS.out.steeringPressed
       elif CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED:
         hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
-        manual_override_detected = hands_on_grip or CS.out.steeringPressed or torque_override_active
+        manual_override_detected = hands_on_grip or CS.out.steeringPressed
 
       if manual_override_detected:
         apply_torque_base = 0
