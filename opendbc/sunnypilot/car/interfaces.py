@@ -97,7 +97,7 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
   if CP.brand == 'hyundai':
     # Shared autonomy modes:
     # 0 = Stock, 1 = Partial, 2 = Disabled.
-    CP_SP.hkgSharedAutonomyMode = 2
+    CP_SP.hkgSharedAutonomyMode = 1
     shared_autonomy_mode = params_dict.get("HkgSharedAutonomyMode")
     if shared_autonomy_mode is not None:
       try:
