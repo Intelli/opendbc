@@ -34,6 +34,9 @@ ANGLE_OVERRIDE_EFFORT_MAX_PERCENT = 100.0
 ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT = 10.0
 ANGLE_OVERRIDE_GAIN_MIN_FLOOR = 0.10
 ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS = 40.0
+SHARED_AUTONOMY_MODE_STOCK = 0
+SHARED_AUTONOMY_MODE_PARTIAL = 1
+SHARED_AUTONOMY_MODE_DISABLED = 2
 
 
 def get_baseline_safety_cp():
@@ -146,6 +149,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                               ANGLE_OVERRIDE_EFFORT_MIN_PERCENT,
                                               ANGLE_OVERRIDE_EFFORT_MAX_PERCENT))
     self.angle_override_effort_scale = override_effort_percent / 100.0
+    self.shared_autonomy_mode = int(np.clip(self.CP_SP.hkgSharedAutonomyMode,
+                                            SHARED_AUTONOMY_MODE_STOCK,
+                                            SHARED_AUTONOMY_MODE_DISABLED))
     self.override_active = False
 
     self.apply_angle_last = 0
@@ -210,7 +216,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
 
-      override_active = self._get_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
+      torque_override_active = self._get_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
+      override_active = self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_STOCK and torque_override_active
       apply_torque_base, apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
                                                                        override_active, self.angle_override_effort_scale, self.apply_torque_base_last)
       # For angle steering, keep angle-control active state aligned with lateral activity
@@ -223,6 +230,22 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         apply_torque = 0
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
+      # Shared autonomy modes:
+      # - Partial: pause actuation only when manual steering override is detected.
+      # - Disabled: pause actuation when hands-on steering or manual override is detected.
+      manual_override_detected = False
+      if CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_PARTIAL:
+        manual_override_detected = CS.out.steeringPressed
+      elif CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED:
+        hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
+        manual_override_detected = hands_on_grip or CS.out.steeringPressed or torque_override_active
+
+      if manual_override_detected:
+        apply_torque_base = 0
+        apply_torque = 0
+        apply_angle = CS.out.steeringAngleDeg
+        apply_steer_req = False
+        self.angle_filter.x = apply_angle
 
       # After we've used the last angle wherever we needed it, we now update it.
       self.apply_angle_last = apply_angle

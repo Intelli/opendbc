@@ -68,6 +68,8 @@ class CarParamsSP:
   enableGasInterceptor: bool = auto_field()
   hkgTuningAngleCustomLimitMaxSpeedKph: float = auto_field()
   hkgTuningAngleOverrideEffortPercent: float = auto_field()
+  hkgSharedAutonomyEnabled: bool = auto_field()
+  hkgSharedAutonomyMode: int = auto_field()
 
   neuralNetworkLateralControl: 'CarParamsSP.NeuralNetworkLateralControl' = field(default_factory=lambda: CarParamsSP.NeuralNetworkLateralControl())
 
