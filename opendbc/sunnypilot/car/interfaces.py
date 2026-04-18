@@ -95,6 +95,17 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
 
   # Hyundai Custom Longitudinal Tuning
   if CP.brand == 'hyundai':
+    # Shared autonomy modes:
+    # 0 = Stock, 1 = Partial, 2 = Disabled.
+    CP_SP.hkgSharedAutonomyMode = 2
+    shared_autonomy_mode = params_dict.get("HkgSharedAutonomyMode")
+    if shared_autonomy_mode is not None:
+      try:
+        CP_SP.hkgSharedAutonomyMode = int(np.clip(int(shared_autonomy_mode), 0, 2))
+      except (TypeError, ValueError):
+        pass
+    CP_SP.hkgSharedAutonomyEnabled = CP_SP.hkgSharedAutonomyMode == 0
+
     # Steering override effort scaling in percent: 100 keeps stock behavior, 10 minimizes assist during manual override.
     CP_SP.hkgTuningAngleOverrideEffortPercent = 10.0
     override_effort_percent = params_dict.get("HkgTuningAngleOverrideEffortPercent")
