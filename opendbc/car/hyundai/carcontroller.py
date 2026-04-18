@@ -245,7 +245,10 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         manual_override_detected = hands_on_grip or CS.out.steeringPressed
 
       if manual_override_detected:
-        apply_torque_base = 0
+        # In Partial mode, keep the evolving baseline so lateral authority can
+        # resume at the expected level immediately after manual override ends.
+        if self.shared_autonomy_mode != SHARED_AUTONOMY_MODE_PARTIAL:
+          apply_torque_base = 0
         apply_torque = 0
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
