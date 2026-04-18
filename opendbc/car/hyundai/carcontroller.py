@@ -153,6 +153,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                             SHARED_AUTONOMY_MODE_STOCK,
                                             SHARED_AUTONOMY_MODE_DISABLED))
     self.override_active = False
+    self.partial_override_active = False
 
     self.apply_angle_last = 0
 
@@ -171,6 +172,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.override_active = torque_abs >= enter_threshold
 
     return self.override_active
+
+  def _get_partial_override_active(self, steering_torque):
+    torque_abs = abs(steering_torque)
+    enter_threshold = float(self.params.STEER_THRESHOLD)
+    exit_threshold = max(0.0, enter_threshold - ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS)
+
+    if self.partial_override_active:
+      self.partial_override_active = torque_abs >= exit_threshold
+    else:
+      self.partial_override_active = torque_abs >= enter_threshold
+
+    return self.partial_override_active
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -239,8 +252,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # - Disabled: pause actuation when hands-on steering or manual override is detected.
       manual_override_detected = False
       if CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_PARTIAL:
-        manual_override_detected = CS.out.steeringPressed
-      elif CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED:
+        manual_override_detected = self._get_partial_override_active(CS.out.steeringTorque)
+      else:
+        self.partial_override_active = False
+
+      if CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED:
         hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
         manual_override_detected = hands_on_grip or CS.out.steeringPressed
 
@@ -265,6 +281,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       apply_torque_base = 0
       apply_torque = 0
       self.override_active = False
+      self.partial_override_active = False
 
     self.apply_torque_base_last = apply_torque_base
     self.apply_torque_last = apply_torque
