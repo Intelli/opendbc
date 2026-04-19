@@ -38,7 +38,7 @@ SHARED_AUTONOMY_MODE_STOCK = 0
 SHARED_AUTONOMY_MODE_PARTIAL = 1
 SHARED_AUTONOMY_MODE_DISABLED = 2
 DISABLED_RELEASE_LOW_DEMAND_HOLD_S = 1.0
-DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 3.0
+DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
 
 
 def get_baseline_safety_cp():
@@ -254,7 +254,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         apply_steer_req = False
       # Shared autonomy modes:
       # - Partial: pause actuation only when manual steering override is detected.
-      # - Disabled: latch manual control from steeringPressed or touch+torque.
+      # - Disabled: latch manual control only with explicit driver intent (hands-on + torque override).
       manual_override_detected = False
       if CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_PARTIAL:
         # Legacy partial behavior: steeringPressed controls override.
@@ -265,24 +265,32 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
         touch_torque_override = self._get_disabled_torque_override_active(CS.out.steeringTorque, hands_on_grip)
         car_steer_demand_low = abs(desired_angle - CS.out.steeringAngleDeg) <= DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG
+        driver_intent_override = hands_on_grip and (CS.out.steeringPressed or touch_torque_override)
 
         if not self.disabled_manual_override_latched:
-          self.disabled_manual_override_latched = CS.out.steeringPressed or touch_torque_override
+          self.disabled_manual_override_latched = driver_intent_override
+          self.disabled_low_demand_release_timer = 0.0
 
         if self.disabled_manual_override_latched:
           manual_override_detected = True
-          # Additional release path: steering not pressed and car demand remains low for 1s.
-          if not CS.out.steeringPressed and car_steer_demand_low:
-            self.disabled_low_demand_release_timer += DT_CTRL
-          else:
-            self.disabled_low_demand_release_timer = 0.0
-
-          if (not CS.out.steeringPressed and not hands_on_grip) or \
-             (self.disabled_low_demand_release_timer >= DISABLED_RELEASE_LOW_DEMAND_HOLD_S):
+          # Primary release path: hands off means return control immediately.
+          if not hands_on_grip:
             self.disabled_manual_override_latched = False
             self.disabled_torque_override_active = False
             self.disabled_low_demand_release_timer = 0.0
             manual_override_detected = False
+          else:
+            # Secondary release path: steering not pressed and car demand remains low for 1s.
+            if not CS.out.steeringPressed and car_steer_demand_low:
+              self.disabled_low_demand_release_timer += DT_CTRL
+            else:
+              self.disabled_low_demand_release_timer = 0.0
+
+            if self.disabled_low_demand_release_timer >= DISABLED_RELEASE_LOW_DEMAND_HOLD_S:
+              self.disabled_manual_override_latched = False
+              self.disabled_torque_override_active = False
+              self.disabled_low_demand_release_timer = 0.0
+              manual_override_detected = False
       else:
         self.disabled_torque_override_active = False
         self.disabled_manual_override_latched = False
