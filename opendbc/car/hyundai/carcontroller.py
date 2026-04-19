@@ -173,7 +173,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return self.override_active
 
-  def _get_partial_override_active(self, steering_torque):
+  def _get_partial_override_active(self, steering_torque, steering_pressed):
     torque_abs = abs(steering_torque)
     enter_threshold = float(self.params.STEER_THRESHOLD)
     exit_threshold = max(0.0, enter_threshold - ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS)
@@ -181,7 +181,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     if self.partial_override_active:
       self.partial_override_active = torque_abs >= exit_threshold
     else:
-      self.partial_override_active = torque_abs >= enter_threshold
+      # Gate entry on explicit driver override signal so non-driver torque
+      # cannot trigger partial mode cutout on its own.
+      self.partial_override_active = steering_pressed and torque_abs >= enter_threshold
 
     return self.partial_override_active
 
@@ -252,7 +254,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # - Disabled: pause actuation when hands-on steering or manual override is detected.
       manual_override_detected = False
       if CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_PARTIAL:
-        manual_override_detected = self._get_partial_override_active(CS.out.steeringTorque)
+        manual_override_detected = self._get_partial_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
       else:
         self.partial_override_active = False
 
