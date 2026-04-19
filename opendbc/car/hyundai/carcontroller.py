@@ -37,6 +37,8 @@ ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS = 40.0
 SHARED_AUTONOMY_MODE_STOCK = 0
 SHARED_AUTONOMY_MODE_PARTIAL = 1
 SHARED_AUTONOMY_MODE_DISABLED = 2
+DISABLED_RELEASE_LOW_DEMAND_HOLD_S = 1.0
+DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 3.0
 
 
 def get_baseline_safety_cp():
@@ -153,7 +155,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                             SHARED_AUTONOMY_MODE_STOCK,
                                             SHARED_AUTONOMY_MODE_DISABLED))
     self.override_active = False
-    self.partial_override_active = False
+    self.disabled_torque_override_active = False
+    self.disabled_manual_override_latched = False
+    self.disabled_low_demand_release_timer = 0.0
 
     self.apply_angle_last = 0
 
@@ -173,19 +177,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return self.override_active
 
-  def _get_partial_override_active(self, steering_torque, steering_pressed):
+  def _get_disabled_torque_override_active(self, steering_torque, hands_on_grip):
     torque_abs = abs(steering_torque)
     enter_threshold = float(self.params.STEER_THRESHOLD)
     exit_threshold = max(0.0, enter_threshold - ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS)
 
-    if self.partial_override_active:
-      self.partial_override_active = torque_abs >= exit_threshold
+    if self.disabled_torque_override_active:
+      self.disabled_torque_override_active = torque_abs >= exit_threshold
     else:
-      # Gate entry on explicit driver override signal so non-driver torque
-      # cannot trigger partial mode cutout on its own.
-      self.partial_override_active = steering_pressed and torque_abs >= enter_threshold
+      # Do not enter override on touch alone. Require touch + torque.
+      self.disabled_torque_override_active = hands_on_grip and torque_abs >= enter_threshold
 
-    return self.partial_override_active
+    return self.disabled_torque_override_active
 
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
@@ -251,22 +254,43 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         apply_steer_req = False
       # Shared autonomy modes:
       # - Partial: pause actuation only when manual steering override is detected.
-      # - Disabled: pause actuation when hands-on steering or manual override is detected.
+      # - Disabled: latch manual control from steeringPressed or touch+torque.
       manual_override_detected = False
       if CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_PARTIAL:
-        manual_override_detected = self._get_partial_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
-      else:
-        self.partial_override_active = False
-
-      if CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED:
+        # Legacy partial behavior: steeringPressed controls override.
+        manual_override_detected = CS.out.steeringPressed
+        self.disabled_torque_override_active = False
+        self.disabled_manual_override_latched = False
+      elif CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED:
         hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
-        manual_override_detected = hands_on_grip or CS.out.steeringPressed
+        touch_torque_override = self._get_disabled_torque_override_active(CS.out.steeringTorque, hands_on_grip)
+        car_steer_demand_low = abs(desired_angle - CS.out.steeringAngleDeg) <= DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG
+
+        if not self.disabled_manual_override_latched:
+          self.disabled_manual_override_latched = CS.out.steeringPressed or touch_torque_override
+
+        if self.disabled_manual_override_latched:
+          manual_override_detected = True
+          # Additional release path: steering not pressed and car demand remains low for 1s.
+          if not CS.out.steeringPressed and car_steer_demand_low:
+            self.disabled_low_demand_release_timer += DT_CTRL
+          else:
+            self.disabled_low_demand_release_timer = 0.0
+
+          if (not CS.out.steeringPressed and not hands_on_grip) or \
+             (self.disabled_low_demand_release_timer >= DISABLED_RELEASE_LOW_DEMAND_HOLD_S):
+            self.disabled_manual_override_latched = False
+            self.disabled_torque_override_active = False
+            self.disabled_low_demand_release_timer = 0.0
+            manual_override_detected = False
+      else:
+        self.disabled_torque_override_active = False
+        self.disabled_manual_override_latched = False
+        self.disabled_low_demand_release_timer = 0.0
 
       if manual_override_detected:
-        # In Partial mode, keep the evolving baseline so lateral authority can
-        # resume at the expected level immediately after manual override ends.
-        if self.shared_autonomy_mode != SHARED_AUTONOMY_MODE_PARTIAL:
-          apply_torque_base = 0
+        # Keep evolving baseline for Partial/Disabled so lateral authority can
+        # resume immediately after manual override ends.
         apply_torque = 0
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
@@ -283,7 +307,9 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       apply_torque_base = 0
       apply_torque = 0
       self.override_active = False
-      self.partial_override_active = False
+      self.disabled_torque_override_active = False
+      self.disabled_manual_override_latched = False
+      self.disabled_low_demand_release_timer = 0.0
 
     self.apply_torque_base_last = apply_torque_base
     self.apply_torque_last = apply_torque
