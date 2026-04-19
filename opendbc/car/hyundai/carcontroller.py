@@ -46,7 +46,8 @@ def get_baseline_safety_cp():
   return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
 
 
-def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_pressed, override_effort_scale, last_base_gain):
+def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_pressed, override_effort_scale,
+                                  last_base_gain, allow_instant_base_recovery=False):
   if lat_active:
     ceiling = np.interp(v_ego, [0.5, 1.5], [1.0, 0.85])
     shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
@@ -59,7 +60,10 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, steering_p
 
   else:
     target = 0.0
-  base_gain = round(rate_limit(target, last_base_gain, -0.014, 0.004) / 0.004) * 0.004
+  if allow_instant_base_recovery and target > last_base_gain:
+    base_gain = round(target / 0.004) * 0.004
+  else:
+    base_gain = round(rate_limit(target, last_base_gain, -0.014, 0.004) / 0.004) * 0.004
   gain = base_gain
 
   # Manual steering override effort tuning:
@@ -158,6 +162,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.disabled_torque_override_active = False
     self.disabled_manual_override_latched = False
     self.disabled_low_demand_release_timer = 0.0
+    self.disabled_takeover_fast_recovery = False
 
     self.apply_angle_last = 0
 
@@ -240,8 +245,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         self.override_active = False
       override_active = self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_STOCK and torque_override_active
+      allow_instant_base_recovery = self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED and self.disabled_takeover_fast_recovery
+      if allow_instant_base_recovery:
+        self.disabled_takeover_fast_recovery = False
       apply_torque_base, apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
-                                                                       override_active, self.angle_override_effort_scale, self.apply_torque_base_last)
+                                                                       override_active, self.angle_override_effort_scale,
+                                                                       self.apply_torque_base_last, allow_instant_base_recovery)
       # For angle steering, keep angle-control active state aligned with lateral activity
       # rather than reduction-gain magnitude.
       apply_steer_req = CC.latActive
@@ -278,6 +287,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
             self.disabled_manual_override_latched = False
             self.disabled_torque_override_active = False
             self.disabled_low_demand_release_timer = 0.0
+            self.disabled_takeover_fast_recovery = True
             manual_override_detected = False
           else:
             # Secondary release path: steering not pressed and car demand remains low for 1s.
@@ -290,11 +300,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
               self.disabled_manual_override_latched = False
               self.disabled_torque_override_active = False
               self.disabled_low_demand_release_timer = 0.0
+              self.disabled_takeover_fast_recovery = True
               manual_override_detected = False
       else:
         self.disabled_torque_override_active = False
         self.disabled_manual_override_latched = False
         self.disabled_low_demand_release_timer = 0.0
+        self.disabled_takeover_fast_recovery = False
 
       if manual_override_detected:
         # Keep evolving baseline for Partial/Disabled so lateral authority can
@@ -318,6 +330,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.disabled_torque_override_active = False
       self.disabled_manual_override_latched = False
       self.disabled_low_demand_release_timer = 0.0
+      self.disabled_takeover_fast_recovery = False
 
     self.apply_torque_base_last = apply_torque_base
     self.apply_torque_last = apply_torque
