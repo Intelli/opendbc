@@ -35,8 +35,8 @@ ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT = 10.0
 ANGLE_OVERRIDE_GAIN_MIN_FLOOR = 0.10
 ANGLE_OVERRIDE_STEER_THRESHOLD_HYSTERESIS = 40.0
 SHARED_AUTONOMY_MODE_STOCK = 0
-SHARED_AUTONOMY_MODE_PARTIAL = 1
-SHARED_AUTONOMY_MODE_DISABLED = 2
+SHARED_AUTONOMY_MODE_IMPROVED = 1
+SHARED_AUTONOMY_MODE_IMPROVED_LEGACY = 2
 DISABLED_RELEASE_LOW_DEMAND_HOLD_S = 1.0
 DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
 
@@ -157,7 +157,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.angle_override_effort_scale = override_effort_percent / 100.0
     self.shared_autonomy_mode = int(np.clip(self.CP_SP.hkgSharedAutonomyMode,
                                             SHARED_AUTONOMY_MODE_STOCK,
-                                            SHARED_AUTONOMY_MODE_DISABLED))
+                                            SHARED_AUTONOMY_MODE_IMPROVED_LEGACY))
     self.override_active = False
     self.disabled_torque_override_active = False
     self.disabled_manual_override_latched = False
@@ -245,7 +245,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       else:
         self.override_active = False
       override_active = self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_STOCK and torque_override_active
-      allow_instant_base_recovery = self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED and self.disabled_takeover_fast_recovery
+      improved_manual_control_enabled = self.shared_autonomy_mode != SHARED_AUTONOMY_MODE_STOCK
+      allow_instant_base_recovery = improved_manual_control_enabled and self.disabled_takeover_fast_recovery
       if allow_instant_base_recovery:
         self.disabled_takeover_fast_recovery = False
       apply_torque_base, apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
@@ -262,15 +263,11 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = False
       # Shared autonomy modes:
-      # - Partial: pause actuation only when manual steering override is detected.
-      # - Disabled: latch manual control only with explicit driver intent (hands-on + torque override).
+      # - Stock: legacy behavior.
+      # - Improved Manual Control (mode 1 or legacy mode 2):
+      #   latch manual control only with explicit driver intent (hands-on + torque override).
       manual_override_detected = False
-      if CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_PARTIAL:
-        # Legacy partial behavior: steeringPressed controls override.
-        manual_override_detected = CS.out.steeringPressed
-        self.disabled_torque_override_active = False
-        self.disabled_manual_override_latched = False
-      elif CC.latActive and self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_DISABLED:
+      if CC.latActive and improved_manual_control_enabled:
         hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
         touch_torque_override = self._get_disabled_torque_override_active(CS.out.steeringTorque, hands_on_grip)
         car_steer_demand_low = abs(desired_angle - CS.out.steeringAngleDeg) <= DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG
@@ -309,7 +306,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.disabled_takeover_fast_recovery = False
 
       if manual_override_detected:
-        # Keep evolving baseline for Partial/Disabled so lateral authority can
+        # Keep evolving baseline for Improved Manual Control so lateral authority can
         # resume immediately after manual override ends.
         apply_torque = 0
         apply_angle = CS.out.steeringAngleDeg
