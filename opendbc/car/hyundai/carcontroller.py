@@ -39,6 +39,8 @@ SHARED_AUTONOMY_MODE_IMPROVED = 1
 SHARED_AUTONOMY_MODE_IMPROVED_LEGACY = 2
 DISABLED_RELEASE_LOW_DEMAND_HOLD_S = 1.0
 DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
+DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S = 2.0
+DISABLED_REENTRY_GRIP_DWELL_S = 0.1
 
 
 def get_baseline_safety_cp():
@@ -158,6 +160,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.disabled_torque_override_active = False
     self.disabled_manual_override_latched = False
     self.disabled_low_demand_release_timer = 0.0
+    self.disabled_reentry_guard_timer = 0.0
+    self.disabled_reentry_grip_dwell_timer = 0.0
 
     self.apply_angle_last = 0
 
@@ -261,12 +265,21 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       manual_override_detected = False
       if CC.latActive and improved_manual_control_enabled:
         hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
+        if self.disabled_reentry_guard_timer > 0.0:
+          self.disabled_reentry_guard_timer = max(0.0, self.disabled_reentry_guard_timer - DT_CTRL)
+        if hands_on_grip:
+          self.disabled_reentry_grip_dwell_timer += DT_CTRL
+        else:
+          self.disabled_reentry_grip_dwell_timer = 0.0
+
         touch_torque_override = self._get_disabled_torque_override_active(CS.out.steeringTorque, hands_on_grip)
         car_steer_demand_low = abs(desired_angle - CS.out.steeringAngleDeg) <= DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG
-        driver_intent_override = hands_on_grip and (CS.out.steeringPressed or touch_torque_override)
-
+        driver_intent_override = hands_on_grip and touch_torque_override
+        reentry_guard_active = self.disabled_reentry_guard_timer > 0.0
+        reentry_allowed = (not reentry_guard_active) or (self.disabled_reentry_grip_dwell_timer >= DISABLED_REENTRY_GRIP_DWELL_S)
+ 
         if not self.disabled_manual_override_latched:
-          self.disabled_manual_override_latched = driver_intent_override
+          self.disabled_manual_override_latched = driver_intent_override and reentry_allowed
           self.disabled_low_demand_release_timer = 0.0
 
         if self.disabled_manual_override_latched:
@@ -276,6 +289,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
             self.disabled_manual_override_latched = False
             self.disabled_torque_override_active = False
             self.disabled_low_demand_release_timer = 0.0
+            self.disabled_reentry_guard_timer = DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S
+            self.disabled_reentry_grip_dwell_timer = 0.0
             manual_override_detected = False
           else:
             # Secondary release path: steering not pressed and car demand remains low for 1s.
@@ -288,11 +303,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
               self.disabled_manual_override_latched = False
               self.disabled_torque_override_active = False
               self.disabled_low_demand_release_timer = 0.0
+              self.disabled_reentry_guard_timer = DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S
+              self.disabled_reentry_grip_dwell_timer = 0.0
               manual_override_detected = False
       else:
         self.disabled_torque_override_active = False
         self.disabled_manual_override_latched = False
         self.disabled_low_demand_release_timer = 0.0
+        self.disabled_reentry_guard_timer = 0.0
+        self.disabled_reentry_grip_dwell_timer = 0.0
 
       if manual_override_detected:
         # Keep evolving baseline for Improved Manual Control so lateral authority can
@@ -316,6 +335,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.disabled_torque_override_active = False
       self.disabled_manual_override_latched = False
       self.disabled_low_demand_release_timer = 0.0
+      self.disabled_reentry_guard_timer = 0.0
+      self.disabled_reentry_grip_dwell_timer = 0.0
 
     self.apply_torque_base_last = apply_torque_base
     self.apply_torque_last = apply_torque
