@@ -70,7 +70,6 @@ class CarParamsSP:
   hkgTuningAngleOverrideEffortPercent: float = auto_field()
   hkgSharedAutonomyEnabled: bool = auto_field()
   hkgSharedAutonomyMode: int = auto_field()
-  hkgAngleSteeringCommandPath: int = auto_field()
 
   neuralNetworkLateralControl: 'CarParamsSP.NeuralNetworkLateralControl' = field(default_factory=lambda: CarParamsSP.NeuralNetworkLateralControl())
 

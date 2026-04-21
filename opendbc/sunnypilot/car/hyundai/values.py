@@ -14,8 +14,6 @@ class HyundaiSafetyFlagsSP:
   LONG_MAIN_CRUISE_TOGGLEABLE = 2
   HAS_LDA_BUTTON = 4
   NON_SCC = 8
-  FORCE_LKA_STEER_MSG = 16
-  FORCE_LKA_STEER_MSG_ALT = 32
 
 
 class HyundaiFlagsSP(IntFlag):
