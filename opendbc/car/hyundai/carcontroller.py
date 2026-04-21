@@ -278,7 +278,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         driver_intent_override = hands_on_grip and touch_torque_override
         reentry_guard_active = self.disabled_reentry_guard_timer > 0.0
         reentry_allowed = (not reentry_guard_active) or (self.disabled_reentry_grip_dwell_timer >= DISABLED_REENTRY_GRIP_DWELL_S)
- 
+
         if not self.disabled_manual_override_latched:
           self.disabled_manual_override_latched = driver_intent_override and reentry_allowed
           self.disabled_low_demand_release_timer = 0.0
