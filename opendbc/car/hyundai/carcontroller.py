@@ -1,5 +1,3 @@
-import os
-import time
 import numpy as np
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.common.filter_simple import FirstOrderFilter
@@ -10,8 +8,7 @@ from opendbc.car.lateral import apply_driver_steer_torque_limits, common_fault_a
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.hyundai import hyundaicanfd, hyundaican
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, \
-                                       ANGLE_STEERING_CMD_PATH_FORCE_LKAS_ALT, get_angle_steering_cmd_path_from_param
+from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR
 from opendbc.car.interfaces import CarControllerBase
 
 from opendbc.sunnypilot.car.hyundai.escc import EsccCarController
@@ -45,9 +42,6 @@ DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
 DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S = 2.0
 DISABLED_REENTRY_GRIP_DWELL_S = 0.1
 MANUAL_OVERRIDE_KEEP_ACTIVE_ANGLE_DEG = 90.0
-ANGLE_STEERING_DEBUG_LOG_PATH = "/data/openpilot/hkg_angle_steering_debug.log"
-ANGLE_STEERING_DEBUG_LOG_PATH_FALLBACK = "/tmp/hkg_angle_steering_debug.log"
-ANGLE_STEERING_DEBUG_LOG_PERIOD_FRAMES_DEFAULT = 10
 
 
 def get_baseline_safety_cp():
@@ -171,25 +165,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.disabled_reentry_grip_dwell_timer = 0.0
 
     self.apply_angle_last = 0
-    self.steering_cmd_path_param = int(self.CP_SP.hkgAngleSteeringCommandPath)
-    self.steering_cmd_path_config = get_angle_steering_cmd_path_from_param(self.steering_cmd_path_param)
-    self.steering_cmd_path_active = "init"
-    self.steering_cmd_msgs: list[str] = []
-    self.angle_debug_log_path = os.getenv("HKG_ANGLE_STEERING_LOG_PATH", ANGLE_STEERING_DEBUG_LOG_PATH).strip() or ANGLE_STEERING_DEBUG_LOG_PATH
-    period_override = os.getenv("HKG_ANGLE_STEERING_LOG_PERIOD_FRAMES", "").strip()
-    try:
-      period_val = int(period_override) if period_override else ANGLE_STEERING_DEBUG_LOG_PERIOD_FRAMES_DEFAULT
-    except ValueError:
-      period_val = ANGLE_STEERING_DEBUG_LOG_PERIOD_FRAMES_DEFAULT
-    self.angle_debug_log_period_frames = int(np.clip(period_val, 1, 100))
-    self.angle_debug_log_last_failure: str | None = None
-    init_log_msg = (
-      f"init path_param={self.steering_cmd_path_param} path={self.steering_cmd_path_config} "
-      + f"car={self.CP.carFingerprint} long={int(self.CP.openpilotLongitudinalControl)}"
-    )
-    self._write_angle_debug_log(init_log_msg)
-    if self.steering_cmd_path_config == ANGLE_STEERING_CMD_PATH_FORCE_LKAS_ALT and not (self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT):
-      self._write_angle_debug_log("warning: forced LKAS path on non-LKAS_ALT platform may not include angle command signals in this DBC")
 
   def _get_override_active(self, steering_torque, steering_pressed):
     # Keep stock behavior when override effort tuning is effectively disabled.
@@ -220,41 +195,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return self.disabled_torque_override_active
 
-  def _write_angle_debug_log(self, msg: str) -> None:
-    ts = time.time_ns()
-    line = f"{ts} {msg}\n"
-    for path in (self.angle_debug_log_path, ANGLE_STEERING_DEBUG_LOG_PATH_FALLBACK):
-      try:
-        directory = os.path.dirname(path)
-        if directory:
-          os.makedirs(directory, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-          f.write(line)
-        self.angle_debug_log_last_failure = None
-        return
-      except OSError as e:
-        self.angle_debug_log_last_failure = f"{path}: {e}"
-
-  def _log_angle_debug(self, CS, lat_active: bool, apply_steer_req: bool, requested_angle: float,
-                       desired_angle: float, apply_angle: float) -> None:
-    if self.frame % self.angle_debug_log_period_frames != 0:
-      return
-
-    msg = " ".join((
-      f"frame={self.frame}",
-      f"config={self.steering_cmd_path_config}",
-      f"active={self.steering_cmd_path_active}",
-      f"msgs={','.join(self.steering_cmd_msgs)}",
-      f"lat_active={int(lat_active)}",
-      f"steer_req={int(apply_steer_req)}",
-      f"v_ego={CS.out.vEgoRaw:.3f}",
-      f"angle_req={requested_angle:.2f}",
-      f"angle_des={desired_angle:.2f}",
-      f"angle_cmd={apply_angle:.2f}",
-      f"angle_meas={CS.out.steeringAngleDeg:.2f}",
-    ))
-    self._write_angle_debug_log(msg)
-
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
@@ -265,9 +205,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     actuators = CC.actuators
     hud_control = CC.hudControl
     apply_torque_base = self.apply_torque_base_last
-    requested_angle = float(actuators.steeringAngleDeg)
-    desired_angle = float(CS.out.steeringAngleDeg)
-    apply_angle = float(self.apply_angle_last)
 
     # steering torque
     if not self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
@@ -277,7 +214,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       new_torque = int(round(actuators.torque * self.params.STEER_MAX))
       apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
       apply_torque_base = 0
-      apply_angle = float(CS.out.steeringAngleDeg)
 
     # angle control
     else:
@@ -395,8 +331,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_last = float(np.clip(CS.out.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
         self.angle_filter.x = self.apply_angle_last
 
-      apply_angle = float(self.apply_angle_last)
-
     if not CC.latActive:
       apply_torque_base = 0
       apply_torque = 0
@@ -452,9 +386,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     new_actuators.torqueOutputCan = apply_torque
     new_actuators.steeringAngleDeg = self.apply_angle_last
     new_actuators.accel = self.tuning.actual_accel
-
-    if self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-      self._log_angle_debug(CS, CC.latActive, apply_steer_req, requested_angle, desired_angle, apply_angle)
 
     self.frame += 1
     return new_actuators, can_sends
@@ -514,12 +445,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
     # steering control
-    steering_msgs, steering_msg_names, steering_path_active = hyundaicanfd.create_steering_messages(
-      self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last, self.lkas_icon,
-      self.steering_cmd_path_config)
-    can_sends.extend(steering_msgs)
-    self.steering_cmd_msgs = steering_msg_names
-    self.steering_cmd_path_active = steering_path_active
+    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last
+                                                           , self.lkas_icon))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     if self.frame % 5 == 0 and lka_steering:

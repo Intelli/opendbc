@@ -11,14 +11,12 @@ from collections.abc import Callable
 
 from opendbc.car import structs
 from opendbc.car.can_definitions import CanRecvCallable, CanSendCallable
-from opendbc.car.hyundai.values import HyundaiFlags, \
-                                       ANGLE_STEERING_CMD_PATH_PARAM_AUTO, ANGLE_STEERING_CMD_PATH_PARAM_MAX, \
-                                       ANGLE_STEERING_CMD_PATH_PARAM_FORCE_LKAS, ANGLE_STEERING_CMD_PATH_PARAM_FORCE_LKAS_ALT
+from opendbc.car.hyundai.values import HyundaiFlags
 from opendbc.car.subaru.values import SubaruFlags
 from opendbc.car.toyota.values import ToyotaSafetyFlags
 from opendbc.sunnypilot.car.hyundai.enable_radar_tracks import enable_radar_tracks as hyundai_enable_radar_tracks
 from opendbc.sunnypilot.car.hyundai.longitudinal.helpers import LongitudinalTuningType
-from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP, HyundaiSafetyFlagsSP
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 from opendbc.sunnypilot.car.subaru.values_ext import SubaruFlagsSP, SubaruSafetyFlagsSP
 from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
 from opendbc.sunnypilot.car.toyota.values import ToyotaFlagsSP
@@ -97,26 +95,6 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
 
   # Hyundai Custom Longitudinal Tuning
   if CP.brand == 'hyundai':
-    CP_SP.hkgAngleSteeringCommandPath = ANGLE_STEERING_CMD_PATH_PARAM_AUTO
-    angle_cmd_path = params_dict.get("HkgAngleSteeringCommandPath")
-    if angle_cmd_path is not None:
-      try:
-        CP_SP.hkgAngleSteeringCommandPath = int(np.clip(int(angle_cmd_path), ANGLE_STEERING_CMD_PATH_PARAM_AUTO,
-                                                        ANGLE_STEERING_CMD_PATH_PARAM_MAX))
-      except (TypeError, ValueError):
-        pass
-
-    if CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-      has_lka_path = bool(CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG)
-      has_lka_alt_path = bool(CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT)
-      if CP_SP.hkgAngleSteeringCommandPath == ANGLE_STEERING_CMD_PATH_PARAM_FORCE_LKAS_ALT:
-        if has_lka_path:
-          CP_SP.safetyParam |= HyundaiSafetyFlagsSP.FORCE_LKA_STEER_MSG
-        if has_lka_alt_path:
-          CP_SP.safetyParam |= HyundaiSafetyFlagsSP.FORCE_LKA_STEER_MSG_ALT
-      elif CP_SP.hkgAngleSteeringCommandPath == ANGLE_STEERING_CMD_PATH_PARAM_FORCE_LKAS and has_lka_path:
-        CP_SP.safetyParam |= HyundaiSafetyFlagsSP.FORCE_LKA_STEER_MSG
-
     # Improved manual control mode values:
     # 0 = Off (stock behavior), 1 = On, 2 = legacy On.
     CP_SP.hkgSharedAutonomyMode = 1
