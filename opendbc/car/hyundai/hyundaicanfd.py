@@ -1,7 +1,9 @@
 import numpy as np
 from opendbc.car import CanBusBase
 from opendbc.car.crc import CRC16_XMODEM
-from opendbc.car.hyundai.values import HyundaiFlags
+from opendbc.car.hyundai.values import HyundaiFlags, \
+                                      ANGLE_STEERING_CMD_PATH_AUTO, ANGLE_STEERING_CMD_PATH_FORCE_LFA, \
+                                      ANGLE_STEERING_CMD_PATH_FORCE_LKAS, ANGLE_STEERING_CMD_PATH_FORCE_LKAS_ALT
 from opendbc.sunnypilot.car.hyundai.lead_data_ext import CanFdLeadData
 
 
@@ -36,7 +38,8 @@ class CanBus(CanBusBase):
     return self._cam
 
 
-def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon):
+def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque, apply_angle, lkas_icon,
+                             steering_cmd_path=ANGLE_STEERING_CMD_PATH_AUTO):
   values = {
     "LKA_OptUsmSta": 2,
     "LKA_SysIndReq": 2 if enabled else 1,
@@ -61,16 +64,46 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,
     }
 
-  ret = []
-  if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG:
-    lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT else "LKAS"
-    if CP.openpilotLongitudinalControl:
-      ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
-    ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, values))
-  else:
-    ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
+  has_lka = bool(CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG)
+  has_lka_alt = bool(CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT)
+  lkas_msg = "LKAS_ALT" if has_lka_alt else "LKAS"
 
-  return ret
+  msg_sequence: list[tuple[str, int]] = []
+  path_name = ANGLE_STEERING_CMD_PATH_AUTO
+
+  if steering_cmd_path == ANGLE_STEERING_CMD_PATH_FORCE_LFA:
+    msg_sequence = [("LFA", CAN.ECAN)]
+    path_name = "lfa"
+  elif steering_cmd_path == ANGLE_STEERING_CMD_PATH_FORCE_LKAS_ALT:
+    if has_lka_alt:
+      msg_sequence = [("LKAS_ALT", CAN.ACAN)]
+      path_name = "lkas_alt"
+    elif has_lka:
+      msg_sequence = [(lkas_msg, CAN.ACAN)]
+      path_name = "lkas_fallback"
+    else:
+      msg_sequence = [("LFA", CAN.ECAN)]
+      path_name = "lfa_fallback"
+  elif steering_cmd_path == ANGLE_STEERING_CMD_PATH_FORCE_LKAS:
+    if has_lka:
+      msg_sequence = [(lkas_msg, CAN.ACAN)]
+      path_name = "lkas"
+    else:
+      msg_sequence = [("LFA", CAN.ECAN)]
+      path_name = "lfa_fallback"
+  elif has_lka:
+    if CP.openpilotLongitudinalControl:
+      msg_sequence = [("LFA", CAN.ECAN), (lkas_msg, CAN.ACAN)]
+      path_name = "auto_dual"
+    else:
+      msg_sequence = [(lkas_msg, CAN.ACAN)]
+      path_name = "auto_lkas"
+  else:
+    msg_sequence = [("LFA", CAN.ECAN)]
+    path_name = "auto_lfa"
+
+  ret = [packer.make_can_msg(msg_name, msg_bus, values) for msg_name, msg_bus in msg_sequence]
+  return ret, [msg_name for msg_name, _ in msg_sequence], path_name
 
 
 def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt):
