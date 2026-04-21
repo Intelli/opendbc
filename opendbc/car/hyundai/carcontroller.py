@@ -41,6 +41,7 @@ DISABLED_RELEASE_LOW_DEMAND_HOLD_S = 1.0
 DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
 DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S = 2.0
 DISABLED_REENTRY_GRIP_DWELL_S = 0.1
+MANUAL_OVERRIDE_KEEP_ACTIVE_ANGLE_DEG = 90.0
 
 
 def get_baseline_safety_cp():
@@ -314,12 +315,13 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.disabled_reentry_grip_dwell_timer = 0.0
 
       if manual_override_detected:
-        # Keep angle control active while manual override is latched:
-        # command current wheel angle with a small non-zero reduction-gain floor
-        # to avoid temporary LKAS/MDPS warnings during sharp turns.
-        apply_torque = ANGLE_OVERRIDE_GAIN_MIN_FLOOR
+        # Keep angle control active only in very high-angle turns to avoid
+        # temporary LKAS/MDPS warnings, while preserving lighter manual feel
+        # in normal turns.
+        keep_active_in_high_angle = abs(CS.out.steeringAngleDeg) >= MANUAL_OVERRIDE_KEEP_ACTIVE_ANGLE_DEG
+        apply_torque = ANGLE_OVERRIDE_GAIN_MIN_FLOOR if keep_active_in_high_angle else 0
         apply_angle = CS.out.steeringAngleDeg
-        apply_steer_req = True
+        apply_steer_req = keep_active_in_high_angle
         self.angle_filter.x = apply_angle
 
       # After we've used the last angle wherever we needed it, we now update it.
