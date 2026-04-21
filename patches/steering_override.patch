@@ -1,8 +1,8 @@
 diff --git b/opendbc/car/hyundai/carcontroller.py a/opendbc/car/hyundai/carcontroller.py
-index 1928f257..df543562 100644
+index 1928f257..54979718 100644
 --- b/opendbc/car/hyundai/carcontroller.py
 +++ a/opendbc/car/hyundai/carcontroller.py
-@@ -29,6 +29,16 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
+@@ -29,6 +29,19 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
  MAX_ANGLE_RATE = 5
  ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
  EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT = 32.0 / 3.6
@@ -16,10 +16,13 @@ index 1928f257..df543562 100644
 +SHARED_AUTONOMY_MODE_IMPROVED_LEGACY = 2
 +DISABLED_RELEASE_LOW_DEMAND_HOLD_S = 1.0
 +DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
++DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S = 2.0
++DISABLED_REENTRY_GRIP_DWELL_S = 0.1
++MANUAL_OVERRIDE_KEEP_ACTIVE_ANGLE_DEG = 90.0
  
  
  def get_baseline_safety_cp():
-@@ -36,7 +46,7 @@ def get_baseline_safety_cp():
+@@ -36,7 +49,7 @@ def get_baseline_safety_cp():
    return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
  
  
@@ -28,7 +31,7 @@ index 1928f257..df543562 100644
    if lat_active:
      ceiling = np.interp(v_ego, [0.5, 1.5], [1.0, 0.85])
      shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
-@@ -49,8 +59,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain)
+@@ -49,8 +62,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain)
  
    else:
      target = 0.0
@@ -52,7 +55,7 @@ index 1928f257..df543562 100644
  
  
  def process_hud_alert(enabled, fingerprint, hud_control):
-@@ -113,6 +136,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -113,6 +139,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
      self.apply_angle_last = 0
  
      self.accel_last = 0
@@ -60,7 +63,7 @@ index 1928f257..df543562 100644
      self.apply_torque_last = 0
      self.car_fingerprint = CP.carFingerprint
      self.last_button_frame = 0
-@@ -121,8 +145,51 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -121,8 +148,53 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
      if self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph > 0.0:
        self.ev9_angle_limit_speed_threshold = self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph / 3.6
  
@@ -77,6 +80,8 @@ index 1928f257..df543562 100644
 +    self.disabled_torque_override_active = False
 +    self.disabled_manual_override_latched = False
 +    self.disabled_low_demand_release_timer = 0.0
++    self.disabled_reentry_guard_timer = 0.0
++    self.disabled_reentry_grip_dwell_timer = 0.0
 +
      self.apply_angle_last = 0
  
@@ -112,7 +117,7 @@ index 1928f257..df543562 100644
    def update(self, CC, CC_SP, CS, now_nanos):
      EsccCarController.update(self, CS)
      LeadDataCarController.update(self, CC_SP)
-@@ -132,6 +199,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -132,6 +204,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
  
      actuators = CC.actuators
      hud_control = CC.hudControl
@@ -120,7 +125,7 @@ index 1928f257..df543562 100644
  
      # steering torque
      if not self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-@@ -140,6 +208,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -140,6 +213,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                                           MAX_ANGLE_CONSECUTIVE_FRAMES)
        new_torque = int(round(actuators.torque * self.params.STEER_MAX))
        apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
@@ -128,7 +133,7 @@ index 1928f257..df543562 100644
  
      # angle control
      else:
-@@ -165,14 +234,73 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -165,14 +239,90 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
        self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
        self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
  
@@ -151,9 +156,9 @@ index 1928f257..df543562 100644
        # Failsafe if we detected we'd violate safety
        if apply_angle is None:
 +        apply_torque_base = 0
-+        apply_torque = 0
-+        apply_angle = CS.out.steeringAngleDeg
-+        apply_steer_req = False
+         apply_torque = 0
+         apply_angle = CS.out.steeringAngleDeg
+         apply_steer_req = False
 +      # Shared autonomy modes:
 +      # - Stock: legacy behavior.
 +      # - Improved Manual Control (mode 1 or legacy mode 2):
@@ -161,12 +166,21 @@ index 1928f257..df543562 100644
 +      manual_override_detected = False
 +      if CC.latActive and improved_manual_control_enabled:
 +        hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
++        if self.disabled_reentry_guard_timer > 0.0:
++          self.disabled_reentry_guard_timer = max(0.0, self.disabled_reentry_guard_timer - DT_CTRL)
++        if hands_on_grip:
++          self.disabled_reentry_grip_dwell_timer += DT_CTRL
++        else:
++          self.disabled_reentry_grip_dwell_timer = 0.0
++
 +        touch_torque_override = self._get_disabled_torque_override_active(CS.out.steeringTorque, hands_on_grip)
 +        car_steer_demand_low = abs(desired_angle - CS.out.steeringAngleDeg) <= DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG
-+        driver_intent_override = hands_on_grip and (CS.out.steeringPressed or touch_torque_override)
++        driver_intent_override = hands_on_grip and touch_torque_override
++        reentry_guard_active = self.disabled_reentry_guard_timer > 0.0
++        reentry_allowed = (not reentry_guard_active) or (self.disabled_reentry_grip_dwell_timer >= DISABLED_REENTRY_GRIP_DWELL_S)
 +
 +        if not self.disabled_manual_override_latched:
-+          self.disabled_manual_override_latched = driver_intent_override
++          self.disabled_manual_override_latched = driver_intent_override and reentry_allowed
 +          self.disabled_low_demand_release_timer = 0.0
 +
 +        if self.disabled_manual_override_latched:
@@ -176,6 +190,8 @@ index 1928f257..df543562 100644
 +            self.disabled_manual_override_latched = False
 +            self.disabled_torque_override_active = False
 +            self.disabled_low_demand_release_timer = 0.0
++            self.disabled_reentry_guard_timer = DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S
++            self.disabled_reentry_grip_dwell_timer = 0.0
 +            manual_override_detected = False
 +          else:
 +            # Secondary release path: steering not pressed and car demand remains low for 1s.
@@ -188,33 +204,42 @@ index 1928f257..df543562 100644
 +              self.disabled_manual_override_latched = False
 +              self.disabled_torque_override_active = False
 +              self.disabled_low_demand_release_timer = 0.0
++              self.disabled_reentry_guard_timer = DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S
++              self.disabled_reentry_grip_dwell_timer = 0.0
 +              manual_override_detected = False
 +      else:
 +        self.disabled_torque_override_active = False
 +        self.disabled_manual_override_latched = False
 +        self.disabled_low_demand_release_timer = 0.0
++        self.disabled_reentry_guard_timer = 0.0
++        self.disabled_reentry_grip_dwell_timer = 0.0
 +
 +      if manual_override_detected:
-+        # Keep evolving baseline for Improved Manual Control so lateral authority can
-+        # resume immediately after manual override ends.
-         apply_torque = 0
-         apply_angle = CS.out.steeringAngleDeg
-         apply_steer_req = False
++        # Keep angle control active only in very high-angle turns to avoid
++        # temporary LKAS/MDPS warnings, while preserving lighter manual feel
++        # in normal turns.
++        keep_active_in_high_angle = abs(CS.out.steeringAngleDeg) >= MANUAL_OVERRIDE_KEEP_ACTIVE_ANGLE_DEG
++        apply_torque = ANGLE_OVERRIDE_GAIN_MIN_FLOOR if keep_active_in_high_angle else 0
++        apply_angle = CS.out.steeringAngleDeg
++        apply_steer_req = keep_active_in_high_angle
 +        self.angle_filter.x = apply_angle
  
        # After we've used the last angle wherever we needed it, we now update it.
        self.apply_angle_last = apply_angle
-@@ -182,8 +310,14 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -182,8 +332,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
          self.angle_filter.x = self.apply_angle_last
  
      if not CC.latActive:
 +      apply_torque_base = 0
        apply_torque = 0
+-
 +      self.override_active = False
 +      self.disabled_torque_override_active = False
 +      self.disabled_manual_override_latched = False
 +      self.disabled_low_demand_release_timer = 0.0
- 
++      self.disabled_reentry_guard_timer = 0.0
++      self.disabled_reentry_grip_dwell_timer = 0.0
++
 +    self.apply_torque_base_last = apply_torque_base
      self.apply_torque_last = apply_torque
  
