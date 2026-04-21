@@ -314,11 +314,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.disabled_reentry_grip_dwell_timer = 0.0
 
       if manual_override_detected:
-        # Keep evolving baseline for Improved Manual Control so lateral authority can
-        # resume immediately after manual override ends.
-        apply_torque = 0
+        # Keep angle control active while manual override is latched:
+        # command current wheel angle with a small non-zero reduction-gain floor
+        # to avoid temporary LKAS/MDPS warnings during sharp turns.
+        apply_torque = ANGLE_OVERRIDE_GAIN_MIN_FLOOR
         apply_angle = CS.out.steeringAngleDeg
-        apply_steer_req = False
+        apply_steer_req = True
         self.angle_filter.x = apply_angle
 
       # After we've used the last angle wherever we needed it, we now update it.
