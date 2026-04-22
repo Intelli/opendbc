@@ -1,5 +1,5 @@
 diff --git b/opendbc/car/hyundai/carcontroller.py a/opendbc/car/hyundai/carcontroller.py
-index 1928f257..80e8d260 100644
+index 1928f257..c824bfcb 100644
 --- b/opendbc/car/hyundai/carcontroller.py
 +++ a/opendbc/car/hyundai/carcontroller.py
 @@ -29,6 +29,20 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
@@ -18,7 +18,7 @@ index 1928f257..80e8d260 100644
 +DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
 +DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S = 2.0
 +DISABLED_REENTRY_GRIP_DWELL_S = 0.1
-+MANUAL_OVERRIDE_KEEP_ACTIVE_ENTER_ANGLE_DEG = 45.0
++MANUAL_OVERRIDE_KEEP_ACTIVE_ENTER_ANGLE_DEG = 90.0
 +MANUAL_OVERRIDE_KEEP_ACTIVE_EXIT_ANGLE_DEG = 15.0
  
  
