@@ -1,0 +1,35 @@
+diff --git b/opendbc/car/hyundai/carstate.py a/opendbc/car/hyundai/carstate.py
+index 824ac953..99811d6d 100644
+--- b/opendbc/car/hyundai/carstate.py
++++ a/opendbc/car/hyundai/carstate.py
+@@ -266,9 +266,17 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
+     ret.steeringTorque = cp.vl["MDPS"]["MDPS_StrTqSnsrVal"]
+     ret.steeringTorqueEps = cp.vl["MDPS"]["MDPS_OutTqVal"]
+     ret.steerFaultTemporary = cp.vl["MDPS"]["MDPS_LkaFailSta"] != 0
++    ret_sp.hodDirStatus = 0
++    ret_sp.hodTouch = False
++    ret_sp.hodGrip = False
++    ret_sp.hodStrong = False
+     if self.is_canfd_angle_steering:
+       ret.steerFaultTemporary = ret.steerFaultTemporary or cp.vl["MDPS"]["MDPS_ADAS_AciFltSig_Lv2"] != 0
+-      self.hands_on_steering_grip = cp.vl["HOD_FD_01_100ms"]["HOD_Dir_Status"]
++      self.hands_on_steering_grip = int(cp.vl["HOD_FD_01_100ms"]["HOD_Dir_Status"])
++      ret_sp.hodDirStatus = self.hands_on_steering_grip
++      ret_sp.hodTouch = self.hands_on_steering_grip in (1, 2, 3, 4)
++      ret_sp.hodGrip = self.hands_on_steering_grip in (3, 4)
++      ret_sp.hodStrong = self.hands_on_steering_grip in (2, 4)
+       torque_overriding = abs(ret.steeringTorque) > self.params.STEER_THRESHOLD
+       ret.steeringPressed = self.update_steering_pressed(torque_overriding, 5)
+       self.imu_lateral_acceleration = cp.vl["IMU_01_10ms"]["IMU_LatAccelVal"] * 9.81  # m/s^2
+diff --git b/opendbc/car/structs.py a/opendbc/car/structs.py
+index b623a74f..82ab5aa0 100644
+--- b/opendbc/car/structs.py
++++ a/opendbc/car/structs.py
+@@ -174,3 +174,7 @@ class CarControlSP:
+ @auto_dataclass
+ class CarStateSP:
+   speedLimit: float = auto_field()
++  hodDirStatus: int = auto_field()
++  hodTouch: bool = auto_field()
++  hodGrip: bool = auto_field()
++  hodStrong: bool = auto_field()
