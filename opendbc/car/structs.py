@@ -174,7 +174,3 @@ class CarControlSP:
 @auto_dataclass
 class CarStateSP:
   speedLimit: float = auto_field()
-  hodDirStatus: int = auto_field()
-  hodTouch: bool = auto_field()
-  hodGrip: bool = auto_field()
-  hodStrong: bool = auto_field()
