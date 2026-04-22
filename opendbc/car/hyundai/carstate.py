@@ -73,6 +73,12 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     self.is_canfd_angle_steering = CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING
     self.imu_lateral_acceleration = 0.0  # used for CAN FD cars with angle steering
     self.hands_on_steering_grip = 0
+    self.spas_rx_seen = False
+    self.spas1_counter = 0
+    self.spas1_new_signal_1 = 0.0
+    self.spas1_new_signal_2 = 0
+    self.spas2_counter = 0
+    self.spas2_blinker_control = 0
 
   def recent_button_interaction(self) -> bool:
     # On some newer model years, the CANCEL button acts as a pause/resume button based on the PCM state
@@ -326,6 +332,17 @@ class CarState(CarStateBase, EsccCarStateBase, MadsCarState, CarStateExt):
     if self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG:
       self.lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"] if self.CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT
                                           else cp_cam.vl["CAM_0x2a4"])
+
+    spas1 = cp.vl.get("SPAS1")
+    spas2 = cp.vl.get("SPAS2")
+    self.spas_rx_seen = spas1 is not None or spas2 is not None
+    if spas1 is not None:
+      self.spas1_counter = int(spas1.get("COUNTER", self.spas1_counter))
+      self.spas1_new_signal_1 = float(spas1.get("NEW_SIGNAL_1", self.spas1_new_signal_1))
+      self.spas1_new_signal_2 = int(spas1.get("NEW_SIGNAL_2", self.spas1_new_signal_2))
+    if spas2 is not None:
+      self.spas2_counter = int(spas2.get("COUNTER", self.spas2_counter))
+      self.spas2_blinker_control = int(spas2.get("BLINKER_CONTROL", self.spas2_blinker_control))
 
     MadsCarState.update_mads_canfd(self, ret, can_parsers)
 
