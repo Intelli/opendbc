@@ -41,7 +41,8 @@ DISABLED_RELEASE_LOW_DEMAND_HOLD_S = 1.0
 DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
 DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S = 2.0
 DISABLED_REENTRY_GRIP_DWELL_S = 0.1
-MANUAL_OVERRIDE_KEEP_ACTIVE_ANGLE_DEG = 90.0
+MANUAL_OVERRIDE_KEEP_ACTIVE_ENTER_ANGLE_DEG = 45.0
+MANUAL_OVERRIDE_KEEP_ACTIVE_EXIT_ANGLE_DEG = 15.0
 
 
 def get_baseline_safety_cp():
@@ -163,6 +164,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.disabled_low_demand_release_timer = 0.0
     self.disabled_reentry_guard_timer = 0.0
     self.disabled_reentry_grip_dwell_timer = 0.0
+    self.manual_override_keep_active_latched = False
 
     self.apply_angle_last = 0
 
@@ -318,11 +320,18 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         # Keep angle control active only in very high-angle turns to avoid
         # temporary LKAS/MDPS warnings, while preserving lighter manual feel
         # in normal turns.
-        keep_active_in_high_angle = abs(CS.out.steeringAngleDeg) >= MANUAL_OVERRIDE_KEEP_ACTIVE_ANGLE_DEG
+        steering_angle_abs = abs(CS.out.steeringAngleDeg)
+        if self.manual_override_keep_active_latched:
+          self.manual_override_keep_active_latched = steering_angle_abs >= MANUAL_OVERRIDE_KEEP_ACTIVE_EXIT_ANGLE_DEG
+        else:
+          self.manual_override_keep_active_latched = steering_angle_abs >= MANUAL_OVERRIDE_KEEP_ACTIVE_ENTER_ANGLE_DEG
+        keep_active_in_high_angle = self.manual_override_keep_active_latched
         apply_torque = ANGLE_OVERRIDE_GAIN_MIN_FLOOR if keep_active_in_high_angle else 0
         apply_angle = CS.out.steeringAngleDeg
         apply_steer_req = keep_active_in_high_angle
         self.angle_filter.x = apply_angle
+      else:
+        self.manual_override_keep_active_latched = False
 
       # After we've used the last angle wherever we needed it, we now update it.
       self.apply_angle_last = apply_angle
@@ -340,6 +349,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.disabled_low_demand_release_timer = 0.0
       self.disabled_reentry_guard_timer = 0.0
       self.disabled_reentry_grip_dwell_timer = 0.0
+      self.manual_override_keep_active_latched = False
 
     self.apply_torque_base_last = apply_torque_base
     self.apply_torque_last = apply_torque
