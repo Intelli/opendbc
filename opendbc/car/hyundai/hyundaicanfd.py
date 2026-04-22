@@ -61,24 +61,16 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_torque,
       "ADAS_ACIAnglTqRedcGainVal": apply_torque if lat_active else 0,
     }
 
-  has_lka = bool(CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG)
-  has_lka_alt = bool(CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT)
-  lkas_msg = "LKAS_ALT" if has_lka_alt else "LKAS"
-
-  msg_sequence: list[tuple[str, int]] = []
-  if has_lka:
+  ret = []
+  if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG:
+    lkas_msg = "LKAS_ALT" if CP.flags & HyundaiFlags.CANFD_LKA_STEER_MSG_ALT else "LKAS"
     if CP.openpilotLongitudinalControl:
-      msg_sequence = [("LFA", CAN.ECAN), (lkas_msg, CAN.ACAN)]
-      path_name = "auto_dual"
-    else:
-      msg_sequence = [(lkas_msg, CAN.ACAN)]
-      path_name = "auto_lkas"
+      ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
+    ret.append(packer.make_can_msg(lkas_msg, CAN.ACAN, values))
   else:
-    msg_sequence = [("LFA", CAN.ECAN)]
-    path_name = "auto_lfa"
+    ret.append(packer.make_can_msg("LFA", CAN.ECAN, values))
 
-  ret = [packer.make_can_msg(msg_name, msg_bus, values) for msg_name, msg_bus in msg_sequence]
-  return ret, [msg_name for msg_name, _ in msg_sequence], path_name
+  return ret
 
 
 def create_suppress_lfa(packer, CAN, lfa_block_msg, lka_steering_alt):

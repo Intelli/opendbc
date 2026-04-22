@@ -1,5 +1,3 @@
-import os
-import time
 import numpy as np
 from opendbc.car.vehicle_model import VehicleModel
 from opendbc.car.common.filter_simple import FirstOrderFilter
@@ -44,9 +42,6 @@ DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG = 1.0
 DISABLED_REENTRY_GUARD_AFTER_UNLATCH_S = 2.0
 DISABLED_REENTRY_GRIP_DWELL_S = 0.1
 MANUAL_OVERRIDE_KEEP_ACTIVE_ANGLE_DEG = 90.0
-ANGLE_STEERING_DEBUG_LOG_PATH = "/data/openpilot/hkg_angle_steering_debug.log"
-ANGLE_STEERING_DEBUG_LOG_PATH_FALLBACK = "/tmp/hkg_angle_steering_debug.log"
-ANGLE_STEERING_DEBUG_LOG_PERIOD_FRAMES_DEFAULT = 10
 
 
 def get_baseline_safety_cp():
@@ -170,23 +165,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.disabled_reentry_grip_dwell_timer = 0.0
 
     self.apply_angle_last = 0
-    self.steering_cmd_path_config = "auto"
-    self.steering_cmd_path_active = "init"
-    self.steering_cmd_msgs: list[str] = []
-    self.angle_debug_log_path = os.getenv("HKG_ANGLE_STEERING_LOG_PATH", ANGLE_STEERING_DEBUG_LOG_PATH).strip() or ANGLE_STEERING_DEBUG_LOG_PATH
-    period_override = os.getenv("HKG_ANGLE_STEERING_LOG_PERIOD_FRAMES", "").strip()
-    try:
-      period_val = int(period_override) if period_override else ANGLE_STEERING_DEBUG_LOG_PERIOD_FRAMES_DEFAULT
-    except ValueError:
-      period_val = ANGLE_STEERING_DEBUG_LOG_PERIOD_FRAMES_DEFAULT
-    self.angle_debug_log_period_frames = int(np.clip(period_val, 1, 100))
-    self.angle_debug_log_last_failure: str | None = None
-    init_log_msg = (
-      f"init path={self.steering_cmd_path_config} car={self.CP.carFingerprint} long={int(self.CP.openpilotLongitudinalControl)} "
-      + f"shared_mode={self.shared_autonomy_mode} override_scale={self.angle_override_effort_scale:.2f} "
-      + f"ev9_limit_kph={self.ev9_angle_limit_speed_threshold * 3.6:.1f}"
-    )
-    self._write_angle_debug_log(init_log_msg)
 
   def _get_override_active(self, steering_torque, steering_pressed):
     # Keep stock behavior when override effort tuning is effectively disabled.
@@ -217,61 +195,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return self.disabled_torque_override_active
 
-  def _write_angle_debug_log(self, msg: str) -> None:
-    ts = time.time_ns()
-    line = f"{ts} {msg}\n"
-    for path in (self.angle_debug_log_path, ANGLE_STEERING_DEBUG_LOG_PATH_FALLBACK):
-      try:
-        directory = os.path.dirname(path)
-        if directory:
-          os.makedirs(directory, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-          f.write(line)
-        self.angle_debug_log_last_failure = None
-        return
-      except OSError as e:
-        self.angle_debug_log_last_failure = f"{path}: {e}"
-
-  def _log_angle_debug(self, CS, lat_active: bool, apply_steer_req: bool, requested_angle: float,
-                       desired_angle: float, apply_angle: float, requested_angle_clipped: float | None = None,
-                       vm_angle_primary: float | None = None, vm_angle_baseline: float | None = None,
-                       steering_pressed: bool = False, steering_torque: float = 0.0, hands_on_grip: bool = False,
-                       manual_override_detected: bool = False) -> None:
-    if self.frame % self.angle_debug_log_period_frames != 0:
-      return
-
-    def fmt(v: float | None) -> str:
-      return f"{v:.2f}" if v is not None else "none"
-
-    msg = " ".join((
-      f"frame={self.frame}",
-      f"config={self.steering_cmd_path_config}",
-      f"active={self.steering_cmd_path_active}",
-      f"msgs={','.join(self.steering_cmd_msgs)}",
-      f"lat_active={int(lat_active)}",
-      f"steer_req={int(apply_steer_req)}",
-      f"v_ego={CS.out.vEgoRaw:.3f}",
-      f"angle_req={requested_angle:.2f}",
-      f"angle_req_clip={fmt(requested_angle_clipped)}",
-      f"angle_des={desired_angle:.2f}",
-      f"angle_vm1={fmt(vm_angle_primary)}",
-      f"angle_vm2={fmt(vm_angle_baseline)}",
-      f"angle_cmd={apply_angle:.2f}",
-      f"angle_meas={CS.out.steeringAngleDeg:.2f}",
-      f"steer_pressed={int(steering_pressed)}",
-      f"steer_torque={steering_torque:.1f}",
-      f"hands_on={int(hands_on_grip)}",
-      f"manual_override={int(manual_override_detected)}",
-      f"manual_latched={int(self.disabled_manual_override_latched)}",
-      f"spas_seen={int(getattr(CS, 'spas_rx_seen', False))}",
-      f"spas1_counter={int(getattr(CS, 'spas1_counter', 0))}",
-      f"spas1_state={int(getattr(CS, 'spas1_new_signal_2', 0))}",
-      f"spas1_angle={float(getattr(CS, 'spas1_new_signal_1', 0.0)):.2f}",
-      f"spas2_counter={int(getattr(CS, 'spas2_counter', 0))}",
-      f"spas2_blink={int(getattr(CS, 'spas2_blinker_control', 0))}",
-    ))
-    self._write_angle_debug_log(msg)
-
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
@@ -282,14 +205,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     actuators = CC.actuators
     hud_control = CC.hudControl
     apply_torque_base = self.apply_torque_base_last
-    requested_angle = float(actuators.steeringAngleDeg)
-    desired_angle = float(CS.out.steeringAngleDeg)
-    apply_angle = float(self.apply_angle_last)
-    requested_angle_clipped = None
-    vm_angle_primary = None
-    vm_angle_baseline = None
-    hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
-    manual_override_detected = False
 
     # steering torque
     if not self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
@@ -303,8 +218,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     # angle control
     else:
       v_ego_raw = CS.out.vEgoRaw
-      requested_angle_clipped = float(np.clip(actuators.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
-      desired_angle = requested_angle_clipped
+      desired_angle = float(np.clip(actuators.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
 
       self.angle_filter.update_alpha(float(np.interp(CS.out.vEgo, [5, 10, 20], [0.2, 0.1, 0.0])))
       desired_angle = self.angle_filter.update(desired_angle)
@@ -315,17 +229,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = 4.2
         self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = 4.2
 
-      vm_angle_primary = apply_steer_angle_limits_vm(
-        desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM
-      )
-      apply_angle = vm_angle_primary
+      apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
 
       # if we are not the baseline model, we use the baseline model for further limits to prevent a panda block since it is hardcoded for baseline model.
-      vm_angle_baseline = vm_angle_primary
       if self.CP.carFingerprint != ANGLE_SAFETY_BASELINE_MODEL:
-        vm_angle_baseline = apply_steer_angle_limits_vm(apply_angle if apply_angle is not None else desired_angle, self.apply_angle_last, v_ego_raw,
-                                                        CS.out.steeringAngleDeg, CC.latActive, self.params, self.BASELINE_VM)
-        apply_angle = vm_angle_baseline
+        apply_angle = apply_steer_angle_limits_vm(apply_angle or desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive,
+                                                  self.params, self.BASELINE_VM)
 
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
@@ -354,6 +263,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # - Stock: legacy behavior.
       # - Improved Manual Control (mode 1 or legacy mode 2):
       #   latch manual control only with explicit driver intent (hands-on + torque override).
+      manual_override_detected = False
       if CC.latActive and improved_manual_control_enabled:
         hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
         if self.disabled_reentry_guard_timer > 0.0:
@@ -421,8 +331,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         self.apply_angle_last = float(np.clip(CS.out.steeringAngleDeg, -self.params.ANGLE_LIMITS.STEER_ANGLE_MAX, self.params.ANGLE_LIMITS.STEER_ANGLE_MAX))
         self.angle_filter.x = self.apply_angle_last
 
-      apply_angle = float(self.apply_angle_last)
-
     if not CC.latActive:
       apply_torque_base = 0
       apply_torque = 0
@@ -478,11 +386,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     new_actuators.torqueOutputCan = apply_torque
     new_actuators.steeringAngleDeg = self.apply_angle_last
     new_actuators.accel = self.tuning.actual_accel
-
-    if self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-      self._log_angle_debug(CS, CC.latActive, apply_steer_req, requested_angle, desired_angle, apply_angle,
-                            requested_angle_clipped, vm_angle_primary, vm_angle_baseline,
-                            CS.out.steeringPressed, CS.out.steeringTorque, hands_on_grip, manual_override_detected)
 
     self.frame += 1
     return new_actuators, can_sends
@@ -542,11 +445,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     lka_steering_long = lka_steering and self.CP.openpilotLongitudinalControl
 
     # steering control
-    steering_msgs, steering_msg_names, steering_path_active = hyundaicanfd.create_steering_messages(
-      self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last, self.lkas_icon)
-    can_sends.extend(steering_msgs)
-    self.steering_cmd_msgs = steering_msg_names
-    self.steering_cmd_path_active = steering_path_active
+    can_sends.extend(hyundaicanfd.create_steering_messages(self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque, self.apply_angle_last
+                                                           , self.lkas_icon))
 
     # prevent LFA from activating on LKA steering cars by sending "no lane lines detected" to ADAS ECU
     if self.frame % 5 == 0 and lka_steering:
