@@ -152,6 +152,7 @@ class CarControlSP:
   leadOne: 'LeadData' = field(default_factory=lambda: LeadData())
   leadTwo: 'LeadData' = field(default_factory=lambda: LeadData())
   intelligentCruiseButtonManagement: 'IntelligentCruiseButtonManagement' = field(default_factory=lambda: IntelligentCruiseButtonManagement())
+  hkgSharedAutonomyMode: int = 255
 
   @auto_dataclass
   class Param:
@@ -174,3 +175,7 @@ class CarControlSP:
 @auto_dataclass
 class CarStateSP:
   speedLimit: float = auto_field()
+  hodDirStatus: int = auto_field()
+  hodTouch: bool = auto_field()
+  hodGrip: bool = auto_field()
+  hodStrong: bool = auto_field()
