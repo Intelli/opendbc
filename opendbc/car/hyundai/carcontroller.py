@@ -197,6 +197,15 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
     return self.disabled_torque_override_active
 
+  def _reset_shared_autonomy_override_state(self):
+    self.override_active = False
+    self.disabled_torque_override_active = False
+    self.disabled_manual_override_latched = False
+    self.disabled_low_demand_release_timer = 0.0
+    self.disabled_reentry_guard_timer = 0.0
+    self.disabled_reentry_grip_dwell_timer = 0.0
+    self.manual_override_keep_active_latched = False
+
   def update(self, CC, CC_SP, CS, now_nanos):
     EsccCarController.update(self, CS)
     LeadDataCarController.update(self, CC_SP)
@@ -240,6 +249,16 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
+
+      runtime_shared_autonomy_mode = int(getattr(CC_SP, "hkgSharedAutonomyMode", 255))
+      if runtime_shared_autonomy_mode == 255:
+        runtime_shared_autonomy_mode = self.shared_autonomy_mode
+      runtime_shared_autonomy_mode = int(np.clip(runtime_shared_autonomy_mode,
+                                                 SHARED_AUTONOMY_MODE_STOCK,
+                                                 SHARED_AUTONOMY_MODE_IMPROVED_LEGACY))
+      if runtime_shared_autonomy_mode != self.shared_autonomy_mode:
+        self.shared_autonomy_mode = runtime_shared_autonomy_mode
+        self._reset_shared_autonomy_override_state()
 
       torque_override_active = False
       if self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_STOCK:
