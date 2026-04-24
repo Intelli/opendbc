@@ -264,7 +264,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       # Shared autonomy modes:
       # - Stock: legacy behavior.
       # - Improved Manual Control (mode 1 or legacy mode 2):
-      #   latch manual control only with explicit driver intent (hands-on + torque override).
+      #   latch manual control only below the EV9 limits speed with explicit driver intent
+      #   (hands-on + torque override).
       manual_override_detected = False
       if CC.latActive and improved_manual_control_enabled:
         hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
@@ -277,7 +278,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
 
         touch_torque_override = self._get_disabled_torque_override_active(CS.out.steeringTorque, hands_on_grip)
         car_steer_demand_low = abs(desired_angle - CS.out.steeringAngleDeg) <= DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG
-        driver_intent_override = hands_on_grip and touch_torque_override
+        manual_control_speed_allowed = v_ego_raw <= self.ev9_angle_limit_speed_threshold
+        driver_intent_override = manual_control_speed_allowed and hands_on_grip and touch_torque_override
         reentry_guard_active = self.disabled_reentry_guard_timer > 0.0
         reentry_allowed = (not reentry_guard_active) or (self.disabled_reentry_grip_dwell_timer >= DISABLED_REENTRY_GRIP_DWELL_S)
 
