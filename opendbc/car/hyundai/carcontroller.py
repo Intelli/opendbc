@@ -241,13 +241,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
 
+      improved_manual_control_enabled = self.shared_autonomy_mode != SHARED_AUTONOMY_MODE_STOCK
+      hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0)) if improved_manual_control_enabled else False
+      touch_torque_override = False
       torque_override_active = False
       if self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_STOCK:
         torque_override_active = self._get_override_active(CS.out.steeringTorque, CS.out.steeringPressed)
       else:
         self.override_active = False
-      override_active = self.shared_autonomy_mode == SHARED_AUTONOMY_MODE_STOCK and torque_override_active
-      improved_manual_control_enabled = self.shared_autonomy_mode != SHARED_AUTONOMY_MODE_STOCK
+        if CC.latActive:
+          touch_torque_override = self._get_disabled_torque_override_active(CS.out.steeringTorque, hands_on_grip)
+      override_active = torque_override_active or (improved_manual_control_enabled and touch_torque_override)
       apply_torque_base, apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive,
                                                                        override_active, self.angle_override_effort_scale,
                                                                        self.apply_torque_base_last)
@@ -268,7 +272,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
       #   (hands-on + torque override).
       manual_override_detected = False
       if CC.latActive and improved_manual_control_enabled:
-        hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0))
         if self.disabled_reentry_guard_timer > 0.0:
           self.disabled_reentry_guard_timer = max(0.0, self.disabled_reentry_guard_timer - DT_CTRL)
         if hands_on_grip:
@@ -276,7 +279,6 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         else:
           self.disabled_reentry_grip_dwell_timer = 0.0
 
-        touch_torque_override = self._get_disabled_torque_override_active(CS.out.steeringTorque, hands_on_grip)
         car_steer_demand_low = abs(desired_angle - CS.out.steeringAngleDeg) <= DISABLED_RELEASE_LOW_DEMAND_ANGLE_DELTA_DEG
         manual_control_speed_allowed = v_ego_raw <= self.ev9_angle_limit_speed_threshold
         driver_intent_override = manual_control_speed_allowed and hands_on_grip and touch_torque_override
