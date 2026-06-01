@@ -1,5 +1,5 @@
 diff --git b/opendbc/car/hyundai/carcontroller.py a/opendbc/car/hyundai/carcontroller.py
-index a429cea4..1f657e6b 100644
+index cc1611a2..1f657e6b 100644
 --- b/opendbc/car/hyundai/carcontroller.py
 +++ a/opendbc/car/hyundai/carcontroller.py
 @@ -33,7 +33,22 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
@@ -59,7 +59,7 @@ index a429cea4..1f657e6b 100644
  
  
  def process_hud_alert(enabled, fingerprint, hud_control):
-@@ -118,6 +146,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -118,13 +146,64 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
      self.apply_angle_last = 0
  
      self.accel_last = 0
@@ -67,10 +67,12 @@ index a429cea4..1f657e6b 100644
      self.apply_torque_last = 0
      self.car_fingerprint = CP.carFingerprint
      self.last_button_frame = 0
-@@ -127,8 +156,54 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
-     if self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph > 0.0:
-       self.ev9_angle_limit_speed_threshold = self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph / 3.6
+     self.cancel_counter = 0
  
++    self.ev9_angle_limit_speed_threshold = EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT
++    if self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph > 0.0:
++      self.ev9_angle_limit_speed_threshold = self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph / 3.6
++
 +    override_effort_percent = ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT
 +    if self.CP_SP.hkgTuningAngleOverrideEffortPercent > 0.0:
 +      override_effort_percent = float(np.clip(self.CP_SP.hkgTuningAngleOverrideEffortPercent,
@@ -122,7 +124,7 @@ index a429cea4..1f657e6b 100644
    def update(self, CC, CC_SP, CS, now_nanos):
      EsccCarController.update(self, CS)
      LeadDataCarController.update(self, CC_SP)
-@@ -138,6 +213,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -134,6 +213,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
  
      actuators = CC.actuators
      hud_control = CC.hudControl
@@ -130,7 +132,7 @@ index a429cea4..1f657e6b 100644
  
      # steering torque
      if not self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-@@ -146,6 +222,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -142,6 +222,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                                           MAX_ANGLE_CONSECUTIVE_FRAMES)
        new_torque = int(round(actuators.torque * self.params.STEER_MAX))
        apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
@@ -138,12 +140,28 @@ index a429cea4..1f657e6b 100644
  
      # angle control
      else:
-@@ -171,14 +248,101 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
-       self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
-       self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
+@@ -151,6 +232,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+       self.angle_filter.update_alpha(float(np.interp(CS.out.vEgo, [5, 10, 20], [0.2, 0.1, 0.0])))
+       desired_angle = self.angle_filter.update(desired_angle)
+ 
++      max_lat_accel = self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL
++      max_lat_jerk = self.params.ANGLE_LIMITS.MAX_LATERAL_JERK
++      if (self.CP.carFingerprint == CAR.KIA_EV9) and (v_ego_raw <= self.ev9_angle_limit_speed_threshold):
++        self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = 4.2
++        self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = 4.2
++
+       apply_angle = apply_steer_angle_limits_vm(desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive, self.params, self.VM)
+ 
+       # if we are not the baseline model, we use the baseline model for further limits to prevent a panda block since it is hardcoded for baseline model.
+@@ -158,14 +245,104 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+         apply_angle = apply_steer_angle_limits_vm(apply_angle or desired_angle, self.apply_angle_last, v_ego_raw, CS.out.steeringAngleDeg, CC.latActive,
+                                                   self.params, self.BASELINE_VM)
  
 -      apply_torque = compute_torque_reduction_gain(CS.out.steeringTorque, v_ego_raw, CC.latActive, self.apply_torque_last)
 -      apply_steer_req = CC.latActive and apply_torque != 0
++      self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
++      self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
++
 +      improved_manual_control_enabled = self.shared_autonomy_mode != SHARED_AUTONOMY_MODE_STOCK
 +      hands_on_grip = bool(getattr(CS, "hands_on_steering_grip", 0)) if improved_manual_control_enabled else False
 +      touch_torque_override = False
@@ -242,7 +260,7 @@ index a429cea4..1f657e6b 100644
  
        # After we've used the last angle wherever we needed it, we now update it.
        self.apply_angle_last = apply_angle
-@@ -188,8 +352,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -175,8 +352,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
          self.angle_filter.x = self.apply_angle_last
  
      if not CC.latActive:
@@ -262,13 +280,14 @@ index a429cea4..1f657e6b 100644
  
      # accel + longitudinal
 diff --git b/opendbc/car/structs.py a/opendbc/car/structs.py
-index 5ccd5a05..b623a74f 100644
+index 7fd76233..b623a74f 100644
 --- b/opendbc/car/structs.py
 +++ a/opendbc/car/structs.py
-@@ -67,6 +67,9 @@ class CarParamsSP:
+@@ -66,6 +66,10 @@ class CarParamsSP:
+   pcmCruiseSpeed: bool = auto_field()
    intelligentCruiseButtonManagementAvailable: bool = auto_field()
    enableGasInterceptor: bool = auto_field()
-   hkgTuningAngleCustomLimitMaxSpeedKph: float = auto_field()
++  hkgTuningAngleCustomLimitMaxSpeedKph: float = auto_field()
 +  hkgTuningAngleOverrideEffortPercent: float = auto_field()
 +  hkgSharedAutonomyEnabled: bool = auto_field()
 +  hkgSharedAutonomyMode: int = auto_field()
@@ -276,10 +295,10 @@ index 5ccd5a05..b623a74f 100644
    neuralNetworkLateralControl: 'CarParamsSP.NeuralNetworkLateralControl' = field(default_factory=lambda: CarParamsSP.NeuralNetworkLateralControl())
  
 diff --git b/opendbc/sunnypilot/car/interfaces.py a/opendbc/sunnypilot/car/interfaces.py
-index ee76f277..eea26aca 100644
+index 623ad0cc..eea26aca 100644
 --- b/opendbc/sunnypilot/car/interfaces.py
 +++ a/opendbc/sunnypilot/car/interfaces.py
-@@ -95,6 +95,26 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
+@@ -95,6 +95,33 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
  
    # Hyundai Custom Longitudinal Tuning
    if CP.brand == 'hyundai':
@@ -303,6 +322,13 @@ index ee76f277..eea26aca 100644
 +      except (TypeError, ValueError):
 +        pass
 +
-     speed_limit_kph = params_dict.get("HkgTuningAngleCustomLimitMaxSpeedKph")
-     if speed_limit_kph is not None:
-       try:
++    speed_limit_kph = params_dict.get("HkgTuningAngleCustomLimitMaxSpeedKph")
++    if speed_limit_kph is not None:
++      try:
++        CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph = max(0.0, float(speed_limit_kph))
++      except (TypeError, ValueError):
++        pass
++
+     hyundai_longitudinal_tuning = int(params_dict.get("HyundaiLongitudinalTuning", 0))
+     if hyundai_longitudinal_tuning == LongitudinalTuningType.DYNAMIC:
+       CP_SP.flags |= HyundaiFlagsSP.LONG_TUNING_DYNAMIC.value
