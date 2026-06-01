@@ -273,7 +273,7 @@ index 5ccd5a05..b623a74f 100644
    neuralNetworkLateralControl: 'CarParamsSP.NeuralNetworkLateralControl' = field(default_factory=lambda: CarParamsSP.NeuralNetworkLateralControl())
  
 diff --git b/opendbc/sunnypilot/car/interfaces.py a/opendbc/sunnypilot/car/interfaces.py
-index ee76f277..5186496d 100644
+index ee76f277..eea26aca 100644
 --- b/opendbc/sunnypilot/car/interfaces.py
 +++ a/opendbc/sunnypilot/car/interfaces.py
 @@ -95,6 +95,26 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
@@ -282,7 +282,7 @@ index ee76f277..5186496d 100644
    if CP.brand == 'hyundai':
 +    # Improved manual control mode values:
 +    # 0 = Off (stock behavior), 1 = On, 2 = legacy On.
-+    CP_SP.hkgSharedAutonomyMode = 1
++    CP_SP.hkgSharedAutonomyMode = 0
 +    shared_autonomy_mode = params_dict.get("HkgSharedAutonomyMode")
 +    if shared_autonomy_mode is not None:
 +      try:
