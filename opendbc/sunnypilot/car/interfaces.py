@@ -97,7 +97,7 @@ def _initialize_custom_longitudinal_tuning(CI, CP: structs.CarParams, CP_SP: str
   if CP.brand == 'hyundai':
     # Improved manual control mode values:
     # 0 = Off (stock behavior), 1 = On, 2 = legacy On.
-    CP_SP.hkgSharedAutonomyMode = 1
+    CP_SP.hkgSharedAutonomyMode = 0
     shared_autonomy_mode = params_dict.get("HkgSharedAutonomyMode")
     if shared_autonomy_mode is not None:
       try:
