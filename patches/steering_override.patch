@@ -1,11 +1,14 @@
 diff --git b/opendbc/car/hyundai/carcontroller.py a/opendbc/car/hyundai/carcontroller.py
-index 1928f257..c71fb346 100644
+index a429cea4..1f657e6b 100644
 --- b/opendbc/car/hyundai/carcontroller.py
 +++ a/opendbc/car/hyundai/carcontroller.py
-@@ -29,6 +29,20 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
+@@ -33,7 +33,22 @@ MAX_ANGLE_CONSECUTIVE_FRAMES = 2
+ CANCEL_BUTTON_DELAY_FRAMES = 10
+ 
  MAX_ANGLE_RATE = 5
- ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
- EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT = 32.0 / 3.6
+-ANGLE_SAFETY_BASELINE_MODEL = "KIA_SPORTAGE_HEV_2026"
++ANGLE_SAFETY_BASELINE_MODEL = "KIA_EV9"
++EV9_ANGLE_LIMIT_SPEED_THRESHOLD_DEFAULT = 32.0 / 3.6
 +ANGLE_OVERRIDE_EFFORT_MIN_PERCENT = 10.0
 +ANGLE_OVERRIDE_EFFORT_MAX_PERCENT = 100.0
 +ANGLE_OVERRIDE_EFFORT_DEFAULT_PERCENT = 10.0
@@ -23,7 +26,7 @@ index 1928f257..c71fb346 100644
  
  
  def get_baseline_safety_cp():
-@@ -36,7 +50,7 @@ def get_baseline_safety_cp():
+@@ -41,7 +56,7 @@ def get_baseline_safety_cp():
    return CarInterface.get_non_essential_params(ANGLE_SAFETY_BASELINE_MODEL)
  
  
@@ -32,7 +35,7 @@ index 1928f257..c71fb346 100644
    if lat_active:
      ceiling = np.interp(v_ego, [0.5, 1.5], [1.0, 0.85])
      shelf = np.interp(v_ego, [2, 11], [0.45, 0.6])
-@@ -49,8 +63,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain)
+@@ -54,8 +69,21 @@ def compute_torque_reduction_gain(steering_torque, v_ego, lat_active, last_gain)
  
    else:
      target = 0.0
@@ -56,7 +59,7 @@ index 1928f257..c71fb346 100644
  
  
  def process_hud_alert(enabled, fingerprint, hud_control):
-@@ -113,6 +140,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -118,6 +146,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
      self.apply_angle_last = 0
  
      self.accel_last = 0
@@ -64,7 +67,7 @@ index 1928f257..c71fb346 100644
      self.apply_torque_last = 0
      self.car_fingerprint = CP.carFingerprint
      self.last_button_frame = 0
-@@ -121,8 +149,54 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -127,8 +156,54 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
      if self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph > 0.0:
        self.ev9_angle_limit_speed_threshold = self.CP_SP.hkgTuningAngleCustomLimitMaxSpeedKph / 3.6
  
@@ -119,7 +122,7 @@ index 1928f257..c71fb346 100644
    def update(self, CC, CC_SP, CS, now_nanos):
      EsccCarController.update(self, CS)
      LeadDataCarController.update(self, CC_SP)
-@@ -132,6 +206,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -138,6 +213,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
  
      actuators = CC.actuators
      hud_control = CC.hudControl
@@ -127,7 +130,7 @@ index 1928f257..c71fb346 100644
  
      # steering torque
      if not self.CP.flags & HyundaiFlags.CANFD_ANGLE_STEERING:
-@@ -140,6 +215,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -146,6 +222,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
                                                                           MAX_ANGLE_CONSECUTIVE_FRAMES)
        new_torque = int(round(actuators.torque * self.params.STEER_MAX))
        apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
@@ -135,7 +138,7 @@ index 1928f257..c71fb346 100644
  
      # angle control
      else:
-@@ -165,14 +241,101 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -171,14 +248,101 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
        self.params.ANGLE_LIMITS.MAX_LATERAL_ACCEL = max_lat_accel
        self.params.ANGLE_LIMITS.MAX_LATERAL_JERK = max_lat_jerk
  
@@ -239,7 +242,7 @@ index 1928f257..c71fb346 100644
  
        # After we've used the last angle wherever we needed it, we now update it.
        self.apply_angle_last = apply_angle
-@@ -182,8 +345,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
+@@ -188,8 +352,17 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
          self.angle_filter.x = self.apply_angle_last
  
      if not CC.latActive:
