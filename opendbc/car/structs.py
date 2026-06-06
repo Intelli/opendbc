@@ -174,3 +174,5 @@ class CarControlSP:
 @auto_dataclass
 class CarStateSP:
   speedLimit: float = auto_field()
+  handsOnWheel: bool = auto_field()
+  handsOnWheelValid: bool = auto_field()
