@@ -4,6 +4,7 @@ import unittest
 
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.structs import CarParams
+from opendbc.car.hyundai.carstate import HOD_HANDS_ON_STATUSES, HOD_VALID_STATUSES
 from opendbc.car.fw_versions import build_fw_dict
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
@@ -46,6 +47,11 @@ CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
 
 
 class TestHyundaiFingerprint(unittest.TestCase):
+  def test_ev9_hod_statuses(self):
+    assert HOD_VALID_STATUSES == {0, 1, 2, 3, 4}
+    assert HOD_HANDS_ON_STATUSES == {1, 2, 3, 4}
+    assert HOD_VALID_STATUSES - HOD_HANDS_ON_STATUSES == {0}
+
   def test_feature_detection(self):
     # LKA steering
     for lka_steering in (True, False):
