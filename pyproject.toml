@@ -134,6 +134,9 @@ too-many-positional-arguments = "ignore"
 [tool.setuptools]
 include-package-data = true
 
+[tool.setuptools.packages.find]
+include = ["opendbc*"]
+
 [tool.setuptools.package-data]
 "opendbc.car" = ["**/*.capnp", "**/*.toml"]
 "opendbc.dbc" = ["**/*.dbc"]
